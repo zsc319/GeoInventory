@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="本地地质数据清查、统计与质量控制工具">
+  <title>地数镜 · GeoInventory</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%2316735f'/%3E%3Ctext x='32' y='43' text-anchor='middle' font-size='38' fill='white'%3EG%3C/text%3E%3C/svg%3E">
+  <script>document.documentElement.dataset.theme=localStorage.getItem('geo-theme')||'dark'</script>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/cockpit.css">
+  <link rel="stylesheet" href="/static/production-clustering.css">
+  <link rel="stylesheet" href="/static/seismic-workbench.css">
+</head>
+<body class="project-hub-mode">
+  <section class="project-hub" id="project-hub">
+    <header class="project-hub-header">
+      <button class="hub-brand" id="hub-brand-info" type="button" title="查看地数镜软件介绍"><span class="hub-brand-mark">G</span><span><b>地数镜</b><small>GeoInventory</small></span></button>
+      <div class="hub-header-actions"><button class="hub-theme-button" id="hub-theme-toggle" title="切换界面风格">◐</button><button class="secondary hub-open-workspace" id="hub-open-workspace">打开已有 .nvt</button><div class="sinopec-lockup" aria-label="SINOPEC 中国石化"><img src="{{ url_for('static', filename='assets/sinopec-mini.png') }}" alt="中国石化 SINOPEC"></div></div>
+    </header>
+    <div class="project-hub-main">
+      <section class="project-hub-hero"><div><span class="eyebrow">LOCAL GEOLOGICAL DATA INTELLIGENCE</span><h1>项目中心</h1><p>从旧工区资料清查开始，持续掌握井、测井、解释、地震与空间对象的完备程度。</p></div><div class="hub-version-panel"><span>当前软件</span><b id="hub-app-version">GeoInventory —</b><small>本机运行 · 原始资料不上传</small></div></section>
+      <section class="hub-overview" id="hub-overview"><div><span>项目历史</span><b>—</b><small>个分析工区</small></div><div><span>索引资料</span><b>—</b><small>个文件</small></div><div><span>原始数据</span><b>—</b><small>本地引用</small></div><div><span>工区格式</span><b>—</b><small>自动原位迭代</small></div></section>
+      <div class="project-hub-layout">
+        <section class="hub-projects"><div class="hub-section-head"><div><span class="eyebrow">RECENT PROJECTS</span><h2>项目历史</h2><p>点击项目卡进入现有数据清查与分析流程</p></div><button class="ghost" id="hub-refresh-projects">刷新</button></div><div id="hub-project-list" class="hub-project-list"><div class="hub-loading"><i></i><span>正在读取本机项目历史…</span></div></div></section>
+        <aside class="hub-activity"><div class="hub-section-head"><div><span class="eyebrow">WORKSPACE VERSION</span><h2>版本与活动</h2></div></div><div id="hub-version-card" class="hub-version-card"></div><div class="hub-timeline" id="hub-timeline"></div><div class="hub-local-note"><i></i><div><b>本地分析原则</b><span>.nvt 仅保存数据库、索引与过程状态，大型原始数据仍保留在原目录。</span></div></div></aside>
+      </div>
+    </div>
+    <footer class="project-hub-footer"><span>地数镜 · GeoInventory</span><span>面向老油田旧资料的本地清查与空间关联工具</span></footer>
+  </section>
+  <aside class="sidebar">
+    <button class="brand" id="brand-info-button" type="button" title="查看地数镜软件介绍">
+      <div class="brand-mark">G</div>
+      <div><strong>地数镜</strong><span>GeoInventory</span></div>
+    </button>
+    <div class="project-identity"><span class="live-pill"><i></i>代表性扫描</span><strong id="sidebar-project-name">尚未载入项目</strong><small id="sidebar-project-size">—</small></div>
+    <div class="tree-title"><span>资料树</span><small id="tree-total">—</small></div>
+    <div class="project-tree" id="project-tree"><div class="tree-empty">等待项目快照</div></div>
+    <div class="nav-section-title">工具</div>
+    <nav id="nav">
+      <button class="nav-item active" data-page="project"><span>⌗</span>项目驾驶舱</button>
+      <button class="nav-item" data-page="database"><span>▦</span>资料数据库</button>
+      <button class="nav-item" data-page="overview"><span>◫</span>入库总览</button>
+      <button class="nav-item" data-page="import"><span>↥</span>导入数据</button>
+      <button class="nav-item" data-page="wells"><span>⌖</span>井与井名</button>
+      <button class="nav-item" data-page="core"><span>◉</span>岩心标定</button>
+      <button class="nav-item" data-page="curves"><span>〽</span>测井曲线</button>
+      <button class="nav-item" data-page="interpretations"><span>▤</span>解释结论</button>
+      <button class="nav-item" data-page="time-depth"><span>⇵</span>时深关系</button>
+      <button class="nav-item" data-page="horizons"><span>≜</span>层位指定</button>
+      <button class="nav-item" data-page="seismic"><span>≋</span>地震工区</button>
+      <button class="nav-item" data-page="production"><span>⌁</span>生产动态</button>
+      <button class="nav-item" data-page="production-clustering"><span>⌘</span>生产聚类</button>
+      <button class="nav-item" data-page="models"><span>▧</span>模型数据</button>
+      <button class="nav-item" data-page="map"><span>◇</span>空间圈选</button>
+      <button class="nav-item" data-page="format-conversion"><span>⇄</span>格式转化</button>
+      <button class="nav-item" data-page="directory-translation"><span>文</span>目录翻译</button>
+      <button class="nav-item" data-page="data-export"><span>⇩</span>导出数据</button>
+    </nav>
+    <div class="local-note"><span class="status-dot"></span> 数据仅存于本机<br><small>127.0.0.1:5178</small></div>
+  </aside>
+
+  <main>
+    <header class="topbar">
+      <div><div class="breadcrumb"><em id="breadcrumb-project-title">地质资料清查</em> <span>/</span> <b>项目工作区</b></div><h1 id="page-title">项目驾驶舱</h1><p id="page-subtitle">资料完备程度、空间匹配与解释精度的一站式体检</p></div>
+      <div class="top-actions"><span class="freshness"><i></i><span id="scan-time">尚未扫描</span></span><button class="theme-toggle" id="theme-toggle" title="切换界面风格"><span>☀</span><b>浅色</b></button><button class="relationship-search-button" id="relationship-search-button" title="按井、层位和曲线检索关联资料">⌕<b>检索窗</b></button><button class="tool-window-button" id="tool-window-toggle" title="打开筛选与显示窗口">⊞<b>筛选窗</b></button><button class="compare-window-button" id="compare-window-button" title="比较同井资料、曲线或层位的版本和覆盖差异">⇄<b>对比窗</b></button><button class="secondary compact" id="workspace-button">◈ 工区</button><button class="secondary compact" id="open-scan-dialog">⌁ 扫描目录</button><button class="primary compact" data-go="import">＋ 导入数据</button><button class="primary compact hub-return-button" id="back-project-hub" title="返回项目中心">←<b>项目中心</b></button></div>
+    </header>
+
+    <section class="page active" id="page-project">
+      <div class="cockpit-metrics" id="cockpit-metrics"></div>
+      <div class="cockpit-grid">
+        <article class="geo-workspace">
+          <div class="workspace-head">
+            <div><span class="eyebrow">SPATIAL COVERAGE</span><h2>资料空间关系</h2></div>
+            <div class="view-switch" id="project-view-switch"><button class="active" data-project-view="summary">覆盖总览</button><button data-project-view="2d">二维区域</button><button data-project-view="3d">三维关系</button><button data-project-view="table">统计表</button></div>
+          </div>
+          <div class="project-view active" id="project-view-summary">
+            <div class="coverage-summary" id="coverage-summary"></div>
+            <div class="sample-curves"><div class="mini-head"><h3>测井曲线类型覆盖</h3><span id="sample-curves-note">正在读取曲线类型归属…</span></div><div id="sample-curve-bars"></div><footer class="sample-curves-footer"><span id="sample-curves-meta">曲线类型与测井曲线页面联动</span><button type="button" class="secondary compact" id="project-curve-coverage-refresh" title="按当前测井曲线类型归属重新汇总，不读取 LAS 曲线数值">↻ 刷新类型联动</button></footer></div>
+          </div>
+          <div class="project-view" id="project-view-2d"><canvas id="project-map-canvas"></canvas><div class="canvas-overlay top-left"><b>EPSG:32614</b><span>WGS 84 / UTM 14N</span></div><div class="geo-legend"><span><i class="lg seismic"></i>3D 地震</span><span><i class="lg surface"></i>层面网格</span><span><i class="lg line"></i>2D 线</span><span><i class="lg fault"></i>断层</span><span><i class="lg well"></i>井</span></div></div>
+          <div class="project-view" id="project-view-3d"><canvas id="project-3d-canvas"></canvas><div class="canvas-overlay top-left"><b>简化三维关系</b><span>XY 为真实比例，Z 已视觉夸大</span></div><div class="axis-cube"><i class="x">X</i><i class="y">Y</i><i class="z">Z</i></div></div>
+          <div class="project-view" id="project-view-table"><div class="table-wrap cockpit-table"><table><thead><tr><th>资料类型</th><th>文件数</th><th>容量</th><th>抽样方式</th><th>状态</th></tr></thead><tbody id="project-category-table"></tbody></table></div></div>
+        </article>
+        <aside class="quality-rail">
+          <div class="quality-head"><div><span class="eyebrow">DATA HEALTH</span><h2>资料完备度</h2></div><span class="quality-grade" id="quality-grade">—</span></div>
+          <div class="quality-score-wrap"><div class="quality-ring" id="quality-ring"><div><strong>—</strong><span>/ 100</span></div></div><p>综合资料存在性与跨资料覆盖率</p></div>
+          <div class="rail-section"><div class="mini-head"><h3>井资料覆盖</h3><span id="estimated-wells">—</span></div><div id="well-coverage-matrix" class="coverage-matrix"></div></div>
+          <div class="rail-section"><div class="mini-head"><h3>关键发现</h3><span id="alert-count">—</span></div><div id="quality-alerts" class="quality-alerts"></div></div>
+          <div class="rail-section seismic-facts" id="seismic-facts"></div>
+        </aside>
+      </div>
+      <div class="finding-strip" id="finding-strip"></div>
+    </section>
+
+    <section class="page" id="page-database">
+      <div class="database-kpis" id="database-kpis"></div>
+      <section class="database-object-nav panel">
+        <div class="database-object-nav-head"><div><span class="eyebrow">DELIVERY SCOPE</span><h2>定制井组</h2><p>井组用于资料核验与标准工区交付；不会改变统一井身份或原始文件。</p></div><div class="database-well-group-actions"><label>当前井组<select id="database-well-group"><option value="">全部统一井</option></select></label><button class="secondary compact" id="manage-well-groups">管理井组</button><button class="ghost compact" id="well-group-merge-preview" title="仅预览多个井组的并集，不会执行井身份合并">合并预览</button></div></div>
+        <div class="database-type-buttons" id="database-type-buttons"><span>正在读取资料类型…</span></div>
+      </section>
+      <div class="database-layout">
+        <article class="panel database-main">
+          <div class="database-toolbar">
+            <label>资料类型<select id="catalog-category"><option value="">全部资料</option></select></label>
+            <div class="search"><span>⌕</span><input id="catalog-search" placeholder="搜索文件名或原始路径"></div>
+            <button class="secondary" id="catalog-refresh">刷新</button><button class="ghost" id="catalog-unassign" title="将勾选对象移出人工资料夹，不会删除原始文件">移出资料夹</button>
+          </div>
+          <div class="catalog-path" id="catalog-path">完整目录索引</div>
+          <div class="table-wrap catalog-table"><table><thead><tr><th></th><th>文件 / 数据对象</th><th>类型</th><th>原始目录</th><th>扩展名</th><th>大小</th><th>解析状态</th><th>人工分组</th></tr></thead><tbody id="catalog-body"></tbody></table></div>
+          <div class="catalog-pagination"><span id="catalog-page-label">—</span><div><button class="ghost" id="catalog-prev">上一页</button><button class="ghost" id="catalog-next">下一页</button></div></div>
+        </article>
+        <aside class="panel catalog-side">
+          <div class="panel-head"><div><h2>人工资料夹</h2><p>拖动数据对象完成归类；删除或重命名只作用于本软件资料夹。</p></div><button class="secondary compact" id="catalog-new-group">＋ 新建资料夹</button></div>
+          <div class="catalog-groups" id="catalog-groups"><div class="empty-state">选择资料类型后创建资料夹</div></div>
+          <div class="catalog-help"><strong>资料树操作</strong><p>单击分类展开数据对象；右键分类可新建子文件夹。人工分类只写入本软件数据库，不会移动 E 盘原文件。</p></div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="page" id="page-overview">
+      <div class="metric-grid" id="summary-metrics"></div>
+      <div class="grid two">
+        <article class="panel source-scope-panel"><div class="panel-head"><div><h2>井类资料覆盖率</h2><p id="well-source-denominator">统一井数作为唯一分母</p></div><span class="scope-badge">单位：口井</span></div><div id="well-source-bars" class="scope-bars empty-state">暂无数据</div><div class="scope-footnote"><strong>Checkshot 是什么？</strong><span>井震校正的时深关系资料，用于把井深 MD/TVD 与单程或双程时间 OWT/TWT 对应；它不是常规测井曲线。</span></div></article>
+        <article class="panel identity-panel"><div class="panel-head"><div><h2>井身份核验状态</h2><p>井是否存在与井名是否多源互证分开判断</p></div><div class="view-switch identity-view-switch"><button class="active" type="button" data-identity-view="chart">核验状态</button><button type="button" data-identity-view="matrix">资料矩阵</button></div></div><div id="identity-view-chart" class="identity-view-panel"><div id="confidence-chart" class="donut-wrap empty-state">暂无数据</div><div id="identity-standard" class="identity-standard"></div></div><div id="identity-view-matrix" class="identity-view-panel hidden"><div class="identity-matrix-tools"><div class="search"><span>⌕</span><input id="identity-matrix-search" placeholder="搜索 Well Name 或文件名"></div><select id="identity-matrix-sort"><option value="name">按井名</option><option value="missing">按缺失项</option><option value="las">按 LAS 文件数</option><option value="dev">按 DEV 文件数</option><option value="top">按 Well Top 文件数</option></select></div><p id="identity-matrix-note" class="muted">正在载入井类资料证据…</p><div class="table-wrap identity-matrix-table"><table><thead><tr><th>Well Name</th><th>缺失</th><th>Well LAS</th><th>Well DEV</th><th>Well Top</th></tr></thead><tbody id="identity-matrix-body"></tbody></table></div></div></article>
+      </div>
+      <article class="panel file-scope-panel"><div class="panel-head"><div><h2>非井类资料文件构成</h2><p id="file-source-denominator">项目物理文件总数作为分母；地震已合并2D与3D</p></div><span class="scope-badge secondary">单位：文件</span></div><div id="file-source-bars" class="file-scope-bars empty-state">暂无数据</div><div class="scope-footnote"><strong>两套分母互不混用</strong><span>井类回答“多少口统一井具备该资料”；地震、层位、断层等回答“该类文件占项目全部物理文件多少”。主数据与 XML/PRJ/DBF/SHX 等附属文件分别标明。</span></div></article>
+      <article class="panel"><div class="panel-head"><div><h2>最近导入</h2><p>文件、批次、版本和处理状态均可追溯</p></div></div><div class="table-wrap"><table><thead><tr><th>文件</th><th>类型</th><th>批次 / 版本</th><th>记录</th><th>状态</th><th>导入时间</th></tr></thead><tbody id="recent-sources"></tbody></table></div></article>
+    </section>
+
+    <section class="page" id="page-import">
+      <article class="panel preflight-panel">
+        <div class="panel-head"><div><span class="eyebrow">STEP 1 · FAST INVENTORY</span><h2>文件夹预统计</h2><p>递归查看嵌套目录的文件数量、容量和预测资料类型；此阶段不解析 LAS 曲线，也不读取 SEG-Y 振幅</p></div><span class="preflight-state" id="preflight-state">尚未扫描</span></div>
+        <div class="preflight-path"><label>仅预统计的本地文件夹<input id="preflight-path" placeholder="E:\Project\Export\LAS"></label><button class="secondary" type="button" id="pick-preflight-folder">选择文件夹</button><button class="primary" id="run-preflight">快速预统计</button></div>
+        <div class="preflight-result hidden" id="preflight-result">
+          <div class="preflight-metrics" id="preflight-metrics"></div>
+          <div class="preflight-layout">
+            <aside class="preflight-groups" id="preflight-groups"></aside>
+            <div class="preflight-files">
+              <div class="preflight-toolbar"><div class="search"><span>⌕</span><input id="preflight-search" placeholder="搜索文件名或相对路径"></div><button class="ghost" id="preflight-select-visible">选择当前类型</button><button class="ghost" id="preflight-clear">清空选择</button><b id="preflight-selected-count">已选 0</b></div>
+              <div class="table-wrap preflight-table"><table><thead><tr><th></th><th>文件</th><th>预测类型</th><th>扩展名</th><th>大小</th><th>处理能力</th></tr></thead><tbody id="preflight-files-body"></tbody></table></div>
+            </div>
+          </div>
+          <form id="preflight-import-form"><div class="form-grid options-fields"></div><button class="primary full" type="button" id="import-preflight-selected">导入已选文件</button></form>
+        </div>
+      </article>
+      <div class="import-step-divider"><span>独立入口 · 无需先做预统计，可直接导入</span></div>
+      <div class="grid import-grid">
+        <article class="panel">
+          <div class="panel-head"><div><h2>文件导入</h2><p>小文件可多选；超大 SEG-Y 建议使用本机路径</p></div></div>
+          <form id="upload-form">
+            <label class="dropzone" id="dropzone"><input id="files" name="files" type="file" multiple><span class="drop-icon">↥</span><strong>点击选择或拖放文件</strong><small>CSV · XLSX · LAS · SGY/SEGY · GeoJSON</small><em id="file-list">尚未选择文件</em></label>
+            <div class="form-grid options-fields"></div>
+            <button class="primary full" type="submit">开始解析并入库</button>
+          </form>
+        </article>
+        <article class="panel">
+          <div class="panel-head"><div><h2>本机文件 / 文件夹导入</h2><p>可手输或选择目录；直接建立导入任务，与快速预统计互不影响</p></div><button class="secondary compact" type="button" id="pick-import-folder">选择本地文件夹</button></div>
+          <form id="path-form">
+            <label>文件或文件夹路径（每行一个）<textarea id="local-paths" rows="7" placeholder="E:\Project\Export\OFM&#10;D:\Project\Export\survey.sgy"></textarea></label>
+            <div class="form-grid options-fields"></div>
+            <button class="primary full" type="submit">直接导入所选路径</button>
+          </form>
+          <div class="callout"><strong>坐标系不会被猜测</strong><p>SEG-Y 头通常只有坐标数字而没有完整 CRS。请在导入时填写 EPSG 或工区坐标系名称，否则只统计坐标范围。</p></div>
+        </article>
+      </div>
+      <article class="panel import-progress-panel hidden" id="import-progress-panel"><div class="panel-head"><div><h2>实时导入进度</h2><p id="import-progress-stage">正在准备…</p></div><b id="import-progress-percent">0%</b></div><div class="import-progress-track"><div id="import-progress-fill"></div></div><div class="import-progress-meta"><span id="import-progress-file">—</span><span id="import-progress-eta">估算剩余时间：计算中</span></div><div id="import-progress-files"></div></article>
+      <article class="panel" id="import-result-panel"><div class="panel-head"><div><h2>本次导入结果</h2><p>错误文件不会污染已入库数据</p></div></div><div id="import-results" class="empty-state">等待导入</div></article>
+    </section>
+
+    <section class="page" id="page-wells">
+      <section class="well-coordinate-summary" id="well-coordinate-summary" aria-live="polite"><div class="coordinate-summary-loading">正在核验井坐标与 DEV 井底位置…</div></section>
+      <div class="toolbar"><div class="search"><span>⌕</span><input id="well-search" placeholder="搜索井名、UWI、来源或文件"></div><div class="view-switch well-view-switch"><button class="active" data-well-view="table">全部井列表</button><button data-well-view="map">二维井分布</button></div><button class="secondary" id="open-well-group-builder">划分井组</button><button class="secondary" id="show-suggestions">疑似同井清单</button><a class="button secondary" id="well-export" href="/api/export/wells.csv">导出 CSV</a></div>
+      <article class="panel well-group-builder hidden" id="well-group-builder"><div class="panel-head"><div><span class="eyebrow">RULED + MANUAL DELIVERY SCOPE</span><h2>划分井组</h2><p>条件预选后可在二维图中圈井、逐井增删；保存后会直接出现在“目录文件拷贝”的井组范围中。</p></div><button class="ghost" id="close-well-group-builder">收起</button></div><div class="well-group-rule-grid"><label>井组名称<input id="well-group-rule-name" placeholder="例如：KTS 评价井组"></label><label>井名前缀<input id="well-group-rule-prefix" placeholder="例如：EBN, E-"></label><label>包含曲线<input id="well-group-rule-curves" placeholder="GR, RT；未填则不限制"></label><label>钻遇层位<input id="well-group-rule-horizons" placeholder="KTS, T_INF；未填则不限制"></label><label>资料硬证据<select id="well-group-rule-evidence"><option value="">不限</option><option value="well_head">存在 Well Head</option><option value="las">存在 LAS</option><option value="deviation">存在 DEV</option><option value="well_top">存在 Well Top</option><option value="production">存在生产动态</option></select></label><label>生产记录<select id="well-group-rule-production"><option value="">不限</option><option value="has">存在生产历史</option><option value="missing">没有生产历史</option></select></label><label>生产月份至少<input id="well-group-rule-months" type="number" min="0" value="0"></label><label>生产起止范围<span class="well-group-date-pair"><input id="well-group-rule-from" placeholder="起始 YYYY-MM"><input id="well-group-rule-to" placeholder="结束 YYYY-MM"></span></label><label>坐标状态<select id="well-group-rule-coordinate"><option value="">不限</option><option value="has">有坐标</option><option value="missing">无坐标</option></select></label><label>条件关系<select id="well-group-rule-logic"><option value="and">同时满足（AND）</option><option value="or">任一满足（OR）</option></select></label><label>曲线 / 层位关系<select id="well-group-rule-member-mode"><option value="any">任一命中</option><option value="all">全部具备</option></select></label><button class="secondary" id="preview-well-group-rules">预览条件</button><button class="primary" id="save-well-group-rules">保存当前井组</button></div><div class="well-group-rule-result" id="well-group-rule-result">设置条件后点击“预览条件”；也可直接进入二维分布，用画笔圈定井点。</div></article>
+      <article class="panel well-view active" id="well-view-table"><div class="panel-head"><div><h2>统一井清单</h2><p id="well-count-label">—</p></div><div class="legend"><span><i class="dot high"></i>多源互证</span><span><i class="dot medium"></i>单源硬证据</span><span><i class="dot low"></i>待核实身份</span></div></div><div class="table-wrap tall"><table><thead><tr><th>标准井名</th><th>UWI</th><th>来源</th><th>曲线</th><th>测井 / 井斜深度 MD</th><th>首选依据</th><th>身份核验</th><th></th></tr></thead><tbody id="wells-body"></tbody></table></div></article>
+      <article class="panel well-view well-map-panel" id="well-view-map"><div class="well-map-workspace"><aside class="well-map-tree"><div class="mini-head"><h3>井投影</h3><span id="well-map-tree-status">全部统一井</span></div><label class="well-map-tree-label">已建井组<select id="well-map-group-scope"><option value="">全部统一井</option></select></label><div class="well-map-tree-actions"><button class="ghost" id="well-map-scope-all">显示全部</button><button class="ghost" id="well-map-add-selected">加入当前井组</button></div><p class="well-map-tree-note">默认全部投影；取消勾选即可暂不在右侧二维图显示。边界图层请在“筛选窗 → 数据管理”设置。</p><div class="search small"><span>⌕</span><input id="well-map-tree-search" placeholder="搜索井名、UWI 或来源"></div><div id="well-map-tree-list" class="well-map-tree-list empty-state">正在加载井投影…</div></aside><section class="well-map-canvas-area"><div class="well-map-quick"><label><input type="checkbox" id="well-map-labels" checked>井名</label><label>字号<input type="range" id="well-map-label-size" min="7" max="18" value="10"><output id="well-map-label-size-value">10</output></label><label>井点<input type="color" id="well-map-point-color" value="#b9e94b"></label><label><input type="checkbox" id="well-map-trajectories">DEV 轨迹</label><button class="ghost map-tool" id="well-map-zoom-out" title="缩小">−</button><button class="ghost map-tool" id="well-map-zoom-reset" title="恢复 100%">100%</button><button class="ghost map-tool" id="well-map-zoom-in" title="放大">＋</button><button class="ghost map-tool" id="well-map-pan" title="平移视图">✋</button><button class="ghost map-tool" id="well-map-brush" title="画笔圈定井组">⌁ 圈井</button><button class="ghost" id="open-display-manager">更多图层</button></div><canvas id="well-distribution-canvas"></canvas><div class="map-empty" id="well-distribution-empty">没有带坐标的井</div><div class="well-map-caption"><b id="well-map-count">—</b><span id="well-map-method">单击井点查看测井、井斜和来源详情；网格标注为当前 X / Y 坐标</span></div></section></div></article>
+      <article class="panel well-inline-detail hidden" id="well-inline-detail-panel"><div class="panel-head"><div><h2>单井详情</h2><p>详情在当前页面内显示；上方统一井清单保持独立滚动位置</p></div><button class="ghost" id="well-inline-detail-close">收起详情</button></div><div id="well-inline-detail"></div></article>
+      <article class="panel hidden" id="suggestions-panel"><div class="panel-head"><div><h2>疑似同井候选</h2><p>只给出建议，不会自动合并；请结合 UWI、井位和原始文件确认</p></div><div class="suggestion-panel-actions"><button class="secondary" id="strong-trajectory-match" title="仅对候选中同时存在 DEV 的井比较共同 MD 段轨迹">强轨迹匹配</button><button class="ghost" id="suggestion-projection" disabled title="只在二维井图显示当前疑似候选井">二维平面投影</button><button class="ghost" id="close-suggestions">关闭</button></div></div><div id="suggestions-strong-result" class="suggestions-strong-result hidden"></div><div id="suggestions-list" class="empty-state">正在计算…</div></article>
+    </section>
+
+    <section class="page" id="page-curves">
+      <div class="curve-workbench-tabs" id="curve-workbench-tabs"><button class="active" data-curve-panel="coverage">覆盖统计</button><button data-curve-panel="compare">双曲线比较</button><button data-curve-panel="types">曲线类型</button><button data-curve-panel="focus">聚焦合并</button><button data-curve-panel="sampling">采样与重采样评估</button><button data-curve-panel="distribution">曲线值分布</button></div>
+      <div class="curve-panel active" id="curve-panel-coverage">
+        <article class="panel"><div class="panel-head"><div><h2>测井曲线覆盖率</h2><p>同一 mnemonic 跨文件归并；井点筛选激活时同步重算</p></div><div class="search small"><span>⌕</span><input id="curve-search" placeholder="筛选曲线"></div></div><div id="curve-bars" class="bar-list compact-bars"></div></article>
+        <article class="panel"><div class="table-wrap tall"><table><thead><tr><th>曲线</th><th>自动类型</th><th>有此曲线的井</th><th>LAS 文件</th><th>单位</th><th>采样间隔</th><th>分布范围</th><th>提示</th></tr></thead><tbody id="curves-body"></tbody></table></div></article>
+      </div>
+      <div class="curve-panel" id="curve-panel-compare">
+        <article class="panel curve-compare-config"><div class="panel-head"><div><h2>两条曲线的井集合与批次可替代性</h2><p>交集、互斥井、共同深度段、采样率和分布特征联合判断</p></div></div><div class="compare-controls"><label>曲线 A<select id="curve-a"></select></label><span>⇄</span><label>曲线 B<select id="curve-b"></select></label><button class="primary" id="run-curve-compare">开始比较</button></div></article>
+        <div id="curve-compare-result" class="empty-state panel">请选择两条曲线</div>
+      </div>
+      <div class="curve-panel" id="curve-panel-types">
+        <div class="curve-type-toolbar"><div><h2>常规测井曲线类型</h2><p>系统先自动建议，拖拽 mnemonic 到类型卡后转为人工确认；卡内固定两行并可横向滚动</p></div><div class="inline-actions"><button class="secondary" id="new-curve-type">＋ 新建曲线类型</button></div></div>
+        <div class="curve-type-layout"><div class="curve-unclassified panel"><h3>待确认 / 未分类</h3><div id="curve-unclassified"></div></div><div class="curve-type-grid" id="curve-type-grid"></div></div>
+      </div>
+      <div class="curve-panel" id="curve-panel-focus">
+        <div class="callout wide"><strong>建立“每口井一条最终曲线”的非破坏性合并方案</strong><p>自动优选考虑深度覆盖、有效样点完整度、采样间隔、单位、分布可用性与标准 mnemonic。人工指定和排除优先；这里只保存逻辑方案，不删除或改写原始 LAS。</p></div>
+        <article class="panel focus-config"><div class="focus-controls"><label>曲线类型<select id="focus-type"></select></label><label>井集合规则<div class="focus-rule-select"><select id="focus-rule" title="选择后可悬浮查看规则说明"><option value="multiple">存在两条及以上候选</option><option value="all">全部候选 mnemonic 都存在</option><option value="any">至少存在一条候选</option></select><button type="button" class="focus-rule-help" id="focus-rule-help" aria-label="查看井集合规则说明" title="">i</button></div></label><label>最终目标曲线名<input id="focus-output-mnemonic" placeholder="例如 Perforation" autocomplete="off"></label><div class="search"><span>⌕</span><input id="focus-well-search" placeholder="搜索井名"></div><button class="primary" id="run-curve-focus">生成 / 刷新方案</button><button class="primary focus-export-primary" id="export-curve-focus">导出聚合后曲线</button></div></article>
+        <div class="focus-metrics" id="focus-metrics"></div>
+        <article class="panel focus-matrix-panel"><div class="panel-head"><div><h2>逐井候选矩阵</h2><p id="focus-label">先选择一个已经归类的曲线类型</p></div><div class="legend"><span><i class="dot high"></i>最终采用</span><span><i class="dot medium"></i>自动候选</span><span><i class="dot low"></i>人工排除</span></div></div><div class="table-wrap focus-table"><table><thead id="focus-head"></thead><tbody id="focus-body"><tr><td class="empty-state">等待生成方案</td></tr></tbody></table></div></article>
+      </div>
+      <div class="curve-panel" id="curve-panel-sampling">
+        <div class="callout wide"><strong>重采样只做方案评估，不改写原曲线</strong><p>建议目标采样间隔优先取同类型曲线的主众数或较粗的稳定间隔，避免把低分辨率曲线插值成“虚假的高分辨率”。标准化也只提示，不在本软件中执行。</p></div>
+        <article class="panel"><div class="panel-head"><div><h2>采样率与分布一致性</h2><p>按曲线类型汇总采样间隔、深度覆盖和跨井分布差异</p></div></div><div id="sampling-audit"></div></article>
+      </div>
+      <div class="curve-panel" id="curve-panel-distribution">
+        <div class="callout wide"><strong>分布对比使用两级筛选的交集</strong><p>井点筛选先确定参与分析的井，曲线筛选再限定 mnemonic、统一类型、分类状态与层段。原始 LAS 只在点击绘制时按需抽样，不写回原文件。</p></div>
+        <article class="panel distribution-config"><div class="panel-head"><div><h2>曲线值分布场景</h2><p id="distribution-scenario-note">选择分析场景；不同单位自动分面，不共用数值轴</p></div><button class="secondary" id="open-curve-filter">筛选框</button></div>
+          <div class="distribution-controls">
+            <label>对比场景<select id="distribution-mode"><option value="single_curve">单根曲线总体分布</option><option value="same_type">同类曲线名称对比</option><option value="one_type_multiwell">多井单类型曲线</option><option value="single_well_multitype">单井多类型曲线</option><option value="multiwell_multitype">多井多类型矩阵</option><option value="same_well_alternatives">同井同类备选曲线</option><option value="layer_contrast">层段内外分布对比</option><option value="free_compare">自由曲线组合</option></select></label>
+            <label>曲线字段（可多选）<select id="distribution-curves" multiple size="4"></select></label>
+            <label>统一类型（可多选）<select id="distribution-types" multiple size="4"></select></label>
+            <label>井（可多选）<select id="distribution-wells" multiple size="4"></select></label>
+            <label class="distribution-bins">直方图区间数<input id="distribution-bins" type="number" min="12" max="60" value="28"></label>
+            <button class="primary" id="run-curve-distribution">绘制分布</button>
+          </div>
+          <div id="distribution-filter-status" class="distribution-filter-status">正在读取筛选状态…</div>
+        </article>
+        <div id="distribution-metrics" class="distribution-metrics"></div>
+        <article class="panel distribution-chart-panel"><div class="panel-head"><div><h2 id="distribution-title">等待绘制</h2><p id="distribution-method">横轴是曲线实际数值（按单位分面）；纵轴是落入该值域区间的有效样点占比。采用 P01–P99 显示范围，完整最小/最大值仍保留在表格中。</p></div></div><canvas id="curve-distribution-canvas"></canvas><div id="curve-distribution-empty" class="map-empty">选择对比场景、曲线或类型后绘制</div><div id="distribution-warnings"></div></article>
+        <article class="panel"><div class="panel-head"><div><h2>分布统计明细</h2><p>按单位分组，显示样点数、均值、标准差与分位数</p></div></div><div class="table-wrap distribution-table"><table><thead><tr><th>系列</th><th>单位</th><th>样点</th><th>均值 ± 标准差</th><th>P05 / P50 / P95</th><th>完整范围</th><th>井 / 字段</th></tr></thead><tbody id="distribution-body"><tr><td colspan="7" class="empty-state">等待绘制</td></tr></tbody></table></div></article>
+      </div>
+    </section>
+
+    <section class="page" id="page-core">
+      <div class="core-kpis" id="core-kpis"></div>
+      <div class="core-toolbar toolbar"><label>井<select id="core-well-select"><option value="">选择含岩心照片的井</option></select></label><span id="core-selection-note">照片目录与井名、深度段自动关联</span></div>
+      <div class="core-layout">
+        <article class="panel core-gallery-panel"><div class="panel-head"><div><h2>岩心照片</h2><p>支持按井文件夹和“1000ft - 1001ft”文件名自动拾取深度段</p></div></div><div id="core-gallery" class="core-gallery empty-state">尚未发现可关联的岩心照片；界面与解析规则已就绪</div></article>
+        <article class="panel core-trajectory-panel"><div class="panel-head"><div><h2>井轨迹与取心段</h2><p>照片深度按 MD 标注；有 DEV 时沿真实轨迹展示</p></div></div><canvas id="core-trajectory-canvas"></canvas><div id="core-trajectory-empty" class="map-empty">选择井后显示 DEV 轨迹与取心段</div><div id="core-interval-list" class="core-interval-list"></div></article>
+      </div>
+      <div class="callout wide"><strong>识别规则已预置</strong><p>系统只读取照片缩略信息，不修改原文件。未标注 ft/m 的深度不会被猜测；可在后续人工确认单位后再投影到 MD 轨迹。</p></div>
+    </section>
+
+    <section class="page" id="page-interpretations">
+      <div class="interpretation-toolbar"><div class="callout wide"><strong>解释字段独立于岩心数据</strong><p>孔隙度、渗透率、饱和度、岩相等不同批次命名先保留原貌，再拖入统一类型；人工确认会写入当前 .nvt 工区。</p></div><div class="interpretation-toolbar-actions"><button class="primary" id="import-interpretation-data">↑ 导入解释结论</button><button class="secondary" id="new-interpretation-type">＋ 新建解释结论类型</button></div></div>
+      <div class="interpretation-type-layout"><article class="panel interpretation-pool"><div class="panel-head"><div><h2>待分类原始属性</h2><p id="interpretation-label">—</p></div></div><div id="interpretation-unclassified"></div></article><div class="interpretation-type-grid" id="interpretation-type-grid"></div></div>
+      <article class="panel"><div class="panel-head"><div><h2>解释结论统计明细</h2><p>原始属性、统一类型、版本与覆盖井数同步展示</p></div></div><div class="table-wrap tall"><table><thead><tr><th>原始属性名</th><th>解释结论类型</th><th>覆盖井数</th><th>版本数</th><th>版本 / 批次</th><th>取值种类</th><th>数值范围</th></tr></thead><tbody id="interpretations-body"></tbody></table></div></article>
+    </section>
+
+    <section class="page" id="page-time-depth">
+      <div class="time-depth-metrics" id="time-depth-metrics"></div>
+      <article class="panel"><div class="panel-head"><div><h2>时深关系曲线</h2><p>ONE-WAYTIME / OWT / TWT 从常规测井曲线中自动剥离，在此独立统计</p></div></div><div class="table-wrap tall"><table><thead><tr><th>Mnemonic</th><th>关系类型</th><th>覆盖井数</th><th>文件数</th><th>单位</th><th>MD 范围</th><th>采样间隔</th></tr></thead><tbody id="time-depth-body"></tbody></table></div></article>
+      <div class="callout wide"><strong>用途边界</strong><p>这里统计井震标定所需的时深关系，不把时间曲线计入常规九曲线覆盖率；后续可继续接入 Checkshot 与 VSP 的版本比较。</p></div>
+    </section>
+
+    <section class="page" id="page-horizons">
+      <div class="callout wide horizon-principle"><strong>Well Top 与构造面是两类独立证据</strong><p>Well Top 回答“哪口井在多少 MD 被划分到某层”；构造面回答“空间解释面是否与 DEV 井轨迹相交”。同名只建立关联，不把井上分层点替代为空间面，也不把文件份数当成钻遇井数。</p></div>
+      <div class="horizon-metrics" id="horizon-metrics"></div>
+      <div class="horizon-tabs" id="horizon-tabs"><button class="active" data-horizon-panel="tops">Well Top 分层</button><button data-horizon-panel="surfaces">构造面 / ZMAP+</button></div>
+      <section class="horizon-panel active" id="horizon-panel-tops">
+        <article class="panel horizon-naming-panel"><div class="panel-head"><div><h2>层位名称统一</h2><p>原始文件名和 Well Top 名称保持不变；拖入标准层位后，覆盖率、版本、构造面与后续关联统计均按统一标识汇总。</p></div><div class="horizon-name-create"><input id="horizon-canonical-name" placeholder="例如：T1 顶界 / KTS 顶" maxlength="80"><button class="secondary compact" type="button" id="horizon-canonical-create">＋ 新建统一层位</button></div></div><div class="horizon-name-layout"><section><div class="mini-head"><h3>已识别原始层位</h3><span>拖拽到右侧标准层位</span></div><div id="horizon-detected-layer-tags" class="horizon-detected-layer-tags"><span class="muted">正在读取层位名称…</span></div></section><section><div class="mini-head"><h3>统一层位名称</h3><span>可随时重新归类</span></div><div id="horizon-canonical-groups" class="horizon-canonical-groups"><div class="empty-state">新建统一层位后，将左侧原始名称拖入此处</div></div></section></div></article>
+        <article class="panel horizon-source-panel"><div class="panel-head"><div><h2>井上层位覆盖与分层版本</h2><p id="well-top-method">统计每个层位覆盖多少口统一井，以及哪些主 Well Top 文件包含该层</p></div><label class="search compact-search">⌕ <input id="well-top-search" placeholder="搜索层位或方案文件"></label></div><div class="table-wrap horizon-layer-table"><table><thead><tr><th>原始层位</th><th>统一层位标识</th><th>划分井 / 统一井</th><th>覆盖率</th><th>缺失井</th><th>记录</th><th>方案版本</th><th>MD 范围</th><th></th></tr></thead><tbody id="well-top-layer-body"><tr><td colspan="9" class="empty-state">正在统计 Well Top…</td></tr></tbody></table></div></article>
+      </section>
+      <section class="horizon-panel" id="horizon-panel-surfaces">
+        <article class="panel horizon-source-panel"><div class="panel-head"><div><h2>空间构造面对象与版本差异</h2><p id="surface-method">轻量识别规则网格、ZMAP+/XYZ 和 2D 层位；范围、网格、Z 域与指纹用于版本初筛</p></div><label class="search compact-search">⌕ <input id="surface-search" placeholder="搜索构造面、版本或格式"></label></div><div id="structural-surface-list" class="structural-surface-list"><div class="empty-state">正在识别构造面元数据…</div></div></article>
+      </section>
+      <article class="panel horizon-detail-panel" id="horizon-detail-panel">
+        <div class="panel-head"><div><h2 id="horizon-detail-title">选择层位查看钻遇井</h2><p id="horizon-detail-note">可查看分层版本、已划分/钻遇井、缺失井、射孔长度、深层钻进和测井曲线</p></div><div class="horizon-detail-actions"><button class="secondary compact" id="horizon-select-all" disabled>选择当前井</button><button class="ghost compact" id="horizon-clear-selection" disabled>清除选择</button></div></div>
+        <div class="horizon-detail-metrics" id="horizon-detail-metrics"></div>
+        <div class="horizon-detail-layout"><div><div class="mini-head"><h3>方案 / 构造面版本</h3><span id="horizon-version-note">尚未选择</span></div><div id="horizon-version-list" class="horizon-version-list empty-state">点击上方层位或构造面</div><div class="horizon-map-card"><div class="mini-head"><h3>钻遇井与层下轨迹二维投影</h3><span>勾选至多 20 口井；交会 MD 以下轨迹加粗</span></div><canvas id="horizon-well-canvas"></canvas><div id="horizon-map-empty" class="map-empty">选择层位后显示井位</div></div></div><aside><div class="mini-head"><h3>选中井汇总</h3><span id="horizon-selection-count">0 口</span></div><div id="horizon-selected-summary" class="horizon-selected-summary empty-state">勾选一口或多口钻遇井，汇总射孔、深层层位和曲线</div><details class="horizon-missing"><summary>查看缺失井 <span id="horizon-missing-count">—</span></summary><div id="horizon-missing-list"></div></details></aside></div>
+        <div class="table-wrap horizon-well-table"><table><thead><tr><th><input type="checkbox" id="horizon-well-check-all" aria-label="全选可见井"></th><th>钻遇井</th><th>交会 / 分层 MD</th><th>层下钻进</th><th>射孔</th><th>测井曲线</th><th>更深层位</th><th></th></tr></thead><tbody id="horizon-hit-wells-body"><tr><td colspan="8" class="empty-state">尚未选择层位</td></tr></tbody></table></div>
+      </article>
+    </section>
+
+    <section class="page" id="page-seismic">
+      <article class="panel seismic-search-hero"><div><span class="eyebrow">SEISMIC VOLUME INVENTORY</span><h2>地震体检索</h2><p>检索当前项目内的 SEG-Y 与 ZGY；同名地震体合并为一个大类，每个实际文件路径仍独立保留。</p></div><button class="secondary" type="button" id="refresh-seismic-inventory">↻ 重新检索目录</button></article>
+      <div class="seismic-inventory-metrics" id="seismic-inventory-metrics"><div><span>地震体大类</span><b>—</b></div><div><span>文件路径</span><b>—</b></div><div><span>SEG-Y</span><b>—</b></div><div><span>ZGY</span><b>—</b></div><div><span>重复路径组</span><b>—</b></div></div>
+      <div class="seismic-workbench">
+        <aside class="panel seismic-browser">
+          <div class="seismic-browser-head"><div><h2>地震体大类</h2><p id="seismic-inventory-method">正在读取项目目录…</p></div><span id="seismic-filter-count">—</span></div>
+          <label class="search seismic-search"><span>⌕</span><input id="seismic-volume-search" placeholder="名称、目录或属性"></label>
+          <div class="seismic-filter-grid"><label>格式<select id="seismic-format-filter"><option value="">SEG-Y + ZGY</option><option value="SEG-Y">SEG-Y</option><option value="ZGY">ZGY</option></select></label><label>维度<select id="seismic-dimension-filter"><option value="">全部</option><option value="3D">3D</option><option value="2D">2D</option></select></label><label>域<select id="seismic-domain-filter"><option value="">全部</option><option value="时间域">时间域</option><option value="深度域">深度域</option><option value="待确认">待确认</option></select></label><label>地震道内容<select id="seismic-attribute-filter"><option value="">全部属性</option></select></label><label class="seismic-duplicate-toggle"><input type="checkbox" id="seismic-duplicate-filter"><span>只看多路径</span></label></div>
+          <div class="seismic-volume-list" id="seismic-volume-list"><div class="empty-state">正在检索 .sgy / .segy / .seg-y / .zgy…</div></div>
+        </aside>
+        <article class="panel seismic-detail" id="seismic-detail">
+          <div class="seismic-detail-empty"><i>≋</i><b>选择一个地震体</b><span>查看格式、路径、道网格、属性类型、数据域、采样和空间范围。</span></div>
+        </article>
+      </div>
+      <div class="callout wide"><strong>读取与判别口径</strong><p>页面初次检索只读取文件名、大小及 SEG-Y 文本头/二进制头，不读取振幅样点；点击“完整解析道头”后才遍历所选 SEG-Y 的 trace header，得到精确 Inline × Crossline、道数、坐标范围与异常提示。振幅/速度/阻抗等业务类型和时间域/深度域若来自文件名或文本头推断，会明确标注“推断”，不会冒充文件内确定字段。ZGY 在解码组件不可用时仍会建立路径索引，但内部网格保持待解析。</p></div>
+    </section>
+
+    <section class="page" id="page-production">
+      <article class="panel ofm-mount-panel"><div class="panel-head"><div><span class="eyebrow">OFM ACCESS DATABASE</span><h2>OFM 数据库挂载</h2><p>只读识别标准与本地化 OFM 表：井位、生产、轨迹、井上标志、状态事件、压力、注入与射孔</p></div><span class="ofm-mount-state" id="ofm-mount-status">尚未挂载</span></div><div class="ofm-mount-controls"><label>OFM 数据库文件<input id="ofm-mdb-path" placeholder="E:\Project\OFM\ACE_OFM.mdb"></label><button class="secondary" type="button" id="pick-ofm-folder">选择所在文件夹</button><button class="primary" type="button" id="mount-ofm-mdb">挂载并分析 MDB</button><button class="secondary hidden" type="button" id="reanalyze-ofm-mdb">重新分析当前 MDB</button><a class="button secondary" href="/api/production/export-package.zip" id="production-export-package">导出完整拆分包</a></div><div class="ofm-mount-note" id="ofm-mount-note">原始 Access 文件不会被修改；工区仅保存挂载路径、表目录、样例和结构化映射结果。</div><div class="ofm-semantic-profile" id="ofm-semantic-profile"><div class="empty-state">挂载后会识别可用井位、生产、轨迹、层位与事件表，并显示读取口径。</div></div></article>
+      <div class="production-metrics" id="production-metrics"></div>
+      <div class="production-workbench-tabs" id="production-workbench-tabs"><button class="active" data-production-panel="overview">动态总览</button><button data-production-panel="database">MDB 表结构</button><button data-production-panel="keywords">字段 / 关键字</button><button data-production-panel="exports">导出中心</button></div>
+      <div class="production-panel active" id="production-panel-overview">
+        <div class="grid two production-grid">
+          <article class="panel"><div class="panel-head"><div><h2>生产动态资料</h2><p>保留目录索引与 MDB 挂载来源；可继续导入独立 CSV/XLSX</p></div><button class="secondary compact" data-go="import">＋ 导入生产表</button></div><div class="table-wrap production-files"><table><thead><tr><th>文件</th><th>原始目录</th><th>大小</th><th>状态</th></tr></thead><tbody id="production-files-body"></tbody></table></div></article>
+          <article class="panel"><div class="panel-head"><div><h2>射孔层段</h2><p>顶/底深均为 MD；二维图中沿 DEV 轨迹加粗投影</p></div><button class="secondary compact" id="show-perforations-map">在井图显示</button></div><div class="production-filter-row"><label class="search small"><span>⌕</span><input id="production-interval-search" placeholder="井名 / 层位 / 射孔段"></label><button class="secondary compact" type="button" id="production-interval-search-button">搜索</button><span class="production-interval-search-status" id="production-interval-search-status" aria-live="polite">输入层位名后返回对应井</span></div><div class="table-wrap production-intervals"><table><thead><tr><th>井名</th><th>层段</th><th>MD 顶</th><th>MD 底</th><th>状态 / 日期</th></tr></thead><tbody id="production-intervals-body"></tbody></table></div></article>
+        </div>
+        <article class="panel production-dynamics-panel"><div class="panel-head"><div><h2>单井生产历程</h2><p>按需读取单井 OFM 记录；可自行选择横轴、多个纵轴指标与递减拟合字段。</p></div><div class="production-well-tools"><label class="search small"><span>⌕</span><input id="production-well-search" placeholder="搜索生产井 / 产层"></label><label>查看井<select id="production-well-select"><option value="">尚无生产井</option></select></label></div></div><div class="production-dynamics-layout"><div class="table-wrap production-summary-table"><table><thead><tr><th title="OFM 中的生产井名；后续与工区统一井身份关联">生产井</th><th title="精确井名、已确认别名或模糊候选的关联状态">井匹配</th><th title="由 XY/井分类/射孔层段等可用信息汇总的生产层系">层系</th><th title="首条有效生产记录或投产事件日期">投产</th><th title="具有有效生产记录的月份数，不等同于连续日历月">生产月</th><th title="首个有效生产月的日产油与日产水之和；月产量除以开井天数">初期日产液</th><th title="首个有效生产月的月产油除以开井天数，单位 bbl/d">初期日产油</th><th title="初期日产水 ÷ 初期日产液 × 100%">初期含水</th><th title="逐月产油量累加后除以 1000，单位 kbbl">累产油 kbbl</th><th title="逐月产水量累加后除以 1000，单位 kbbl">累产水 kbbl</th><th title="末次有效压力减首次有效压力；压力类型和单位取决于 PRS 原表">压力变化</th></tr></thead><tbody id="production-summary-body"></tbody></table></div><div class="production-chart-card"><div class="mini-head"><h3 id="production-chart-title">生产曲线</h3><span id="production-series-status">选择生产井后按需读取</span></div><div class="production-chart-controls"><label>横轴<select id="production-x-axis"><option value="date">日期 / 年月日</option><option value="month_index">有效生产月序号</option><option value="cumulative_oil">累产油</option><option value="cumulative_water">累产水</option><option value="cumulative_liquid">累产液</option><option value="cumulative_days">累计生产天数</option></select></label><label>递减拟合<select id="production-fit-metric"><option value="">不拟合</option><option value="oil_rate">日产油</option><option value="liquid_rate">日产液</option><option value="water_rate">日产水</option></select></label><button class="secondary compact" type="button" id="production-refresh-chart">刷新绘图</button><div class="production-y-fields" id="production-y-fields"><label><input type="checkbox" value="oil_rate" checked>日产油</label><label><input type="checkbox" value="water_rate">日产水</label><label><input type="checkbox" value="liquid_rate">日产液</label><label><input type="checkbox" value="water_cut">含水</label><label><input type="checkbox" value="cumulative_oil">累产油</label><label><input type="checkbox" value="cumulative_water">累产水</label><label><input type="checkbox" value="pressure">压力</label></div></div><canvas id="production-chart-canvas"></canvas><div id="production-chart-empty" class="production-chart-empty">选择生产井后，按需绘制日产油、累产油、日产水、含水与压力等；图形不常驻保存全工区动态数据。</div><div id="production-fit-result" class="production-fit-result"></div><div id="production-event-list" class="production-event-list"></div></div></div></article>
+      </div>
+      <div class="production-panel" id="production-panel-database"><div class="grid ofm-browser-grid"><article class="panel"><div class="panel-head"><div><h2>已挂载 MDB</h2><p>文件状态、表数和业务数据映射结果</p></div></div><div class="ofm-source-list" id="ofm-source-list"></div><div class="ofm-table-list" id="ofm-table-list"></div></article><article class="panel ofm-table-preview"><div class="panel-head"><div><h2 id="ofm-table-title">选择一张表</h2><p id="ofm-table-subtitle">按需读取，页面最多展示 200 行</p></div><a class="button secondary compact hidden" id="ofm-table-export" href="#">导出当前表 CSV</a></div><div class="table-wrap"><table><thead id="ofm-table-head"></thead><tbody id="ofm-table-body"><tr><td class="empty-state">请选择左侧 MDB 表</td></tr></tbody></table></div></article></div></div>
+      <div class="production-panel" id="production-panel-keywords"><article class="panel"><div class="panel-head"><div><h2>OFM 字段与关键字目录</h2><p>列出每张 Access 表的字段、数据类型、可空性和业务释义，便于继续建立业务映射</p></div><div class="search small"><span>⌕</span><input id="ofm-keyword-search" placeholder="搜索表名、字段或释义"></div></div><div class="table-wrap ofm-keyword-table"><table><thead><tr><th>表</th><th>类别</th><th>字段</th><th>Access 类型</th><th>长度</th><th>可空</th><th>字段说明</th></tr></thead><tbody id="ofm-keyword-body"></tbody></table></div></article></div>
+      <div class="production-panel" id="production-panel-exports"><article class="panel production-export-center"><div class="panel-head"><div><h2>生产动态拆分导出</h2><p>从原 OFM MDB 生成独立 CSV；完整包还包含全部 Access 原表</p></div><div class="production-export-actions"><button class="secondary" type="button" id="production-export-to-folder">指定导出路径</button><a class="button primary" href="/api/production/export-package.zip">下载完整 ZIP</a></div></div><div class="production-export-status" id="production-export-status">浏览器下载使用默认下载目录；“指定导出路径”会在所选文件夹写入带时间戳的 ZIP。</div><div class="production-export-availability" id="production-export-availability"></div><div class="production-export-grid"><a href="/api/production/export/coordinates.csv"><b>井位坐标</b><span>井口 / 目标坐标、KB、井深、井型、油田与层系</span></a><a href="/api/production/export/perforations.csv"><b>射孔层段</b><span>井名、层段、MD 顶底与状态</span></a><a href="/api/production/export/summary.csv"><b>井基本动态汇总</b><span>层系、投产、初期、累产、含水与压力</span></a><a href="/api/production/export/history.csv"><b>各井生产历史</b><span>逐井逐月生产、开井天数、日产率、月量与压力</span></a><a href="/api/production/export/injection.csv"><b>各井注入历史</b><span>注气、注水、注汽与其他注入</span></a><a href="/api/production/export/events.csv"><b>井状态与干预事件</b><span>开关井状态、措施和修井事件</span></a><a href="/api/production/export/deviations.csv"><b>OFM 原始轨迹 CSV</b><span>MD、TVD 与相对井口 X/Y 偏移</span></a><a href="/api/production/export/deviations-dev.zip"><b>恢复绝对坐标 DEV</b><span>按井输出 MD、绝对 XY、TVD 与原始偏移；下载 ZIP</span></a><a href="/api/production/export/markers.csv"><b>OFM 井上标志与分层</b><span>标志名称、MD、日期与拾取人</span></a><a href="/api/production/export/keywords.csv"><b>OFM 关键字列表</b><span>表名、字段、Access 类型、长度与字段释义</span></a></div><div class="callout"><strong>单位与解释原则</strong><p>标准 PRD 使用月体积÷开井天数计算日率；本工区的西语 PROD 使用 ACEITE/AGUA 日率并结合 DIAS 推算月量。两种口径均写入原始元数据和导出说明，不会静默混用。</p></div></article></div>
+    </section>
+
+    <section class="page" id="page-production-clustering">
+      <div class="cluster-hero panel">
+        <div><span class="eyebrow">PRODUCTION CHARACTER CLUSTERING</span><h2>井产能特征分型</h2><p>把生产曲线、开发层位、射孔、空间邻井与措施影响放进同一条可审计流程，为后续井组评价和开发方案提供线索。</p></div>
+        <div class="cluster-hero-note"><span>当前定位</span><b>规律识别 · 非储量定级</b><small>结果需结合地质认识与工程复核</small></div>
+      </div>
+      <nav class="cluster-steps" id="cluster-steps" aria-label="生产聚类流程"></nav>
+      <div class="cluster-workspace">
+        <aside class="cluster-context panel">
+          <div class="cluster-context-title"><span>本次方案</span><select id="cluster-plan-select" aria-label="切换产能分型方案"><option value="plan-01">产能分型方案 01</option></select><button class="ghost compact" type="button" id="cluster-add-plan">＋ 新增方案</button></div>
+          <div class="cluster-context-kpis" id="cluster-context-kpis"><div><b>—</b><span>生产井</span></div><div><b>—</b><span>有效指标</span></div><div><b>—</b><span>训练井</span></div><div><b>—</b><span>评价井</span></div></div>
+          <div class="cluster-scope-summary" id="cluster-scope-summary"></div>
+          <div class="cluster-compare-control"><button class="secondary compact" type="button" id="cluster-toggle-comparison">聚类结果对比 / 方案树</button><div class="cluster-compare-tree" id="cluster-compare-tree"><span>点击方案名称唯一挂载；左侧复选框仅用于多方案对比</span><div id="cluster-compare-plan-list"></div><div class="cluster-compare-validation" id="cluster-compare-validation">请选择至少两个已训练方案</div><button class="primary compact" type="button" id="cluster-run-comparison" disabled>执行对比</button></div></div>
+          <div class="cluster-guardrail"><i>!</i><p><b>解释边界</b><span>聚类发现相似动态，不直接证明同一储层成因；断层封闭性、注采关系与储量仍需专业判断。</span></p></div>
+        </aside>
+        <section class="cluster-stage panel">
+          <div class="cluster-stage-panel active" data-cluster-stage="inventory">
+            <div class="cluster-stage-head"><div><span>01 · 数据基础</span><h2>先确认这些井是否可比</h2><p>自动检查生产时序、井位、层位、射孔和措施事件。缺失项会保留并标记，不静默填成 0。</p></div><button class="secondary" type="button" data-go="production">返回生产动态</button></div>
+            <div class="cluster-readiness-grid" id="cluster-readiness-grid"></div>
+            <div class="cluster-expert-note"><b>建议的可比原则</b><p>优先在相同开发层系、相近井型与相近投产阶段内分型；老井累产与新井初产不宜单独直接比较。加密井可用同层最近井距识别，措施井则同时看措施前后分段响应。</p></div>
+          </div>
+          <div class="cluster-stage-panel" data-cluster-stage="indicators">
+            <div class="cluster-stage-head"><div><span>02 · 特征工程</span><h2>筛选有效评价指标</h2><p>已按稳健性给出默认组合。你可以人工勾选；鼠标停留在指标说明上可查看计算口径。</p></div><div class="cluster-indicator-actions"><div class="cluster-actions"><button class="ghost compact" id="cluster-select-recommended">恢复推荐</button><span id="cluster-indicator-count">0 项</span></div><div class="cluster-effective-count" id="cluster-indicator-effective"><b>—</b><span>条件筛选后的有效井</span><small>随指标勾选动态刷新</small></div></div></div>
+            <div class="cluster-indicator-groups" id="cluster-indicator-groups"></div>
+          </div>
+          <div class="cluster-stage-panel" data-cluster-stage="dataset">
+            <div class="cluster-stage-head"><div><span>03 · 样本裁剪</span><h2>构建训练数据集</h2><p>默认选择至少有 3 个有效生产期的井。可按井名、层位和措施状态筛选后再人工增删。</p></div><div class="cluster-actions"><button class="ghost compact" id="cluster-select-visible-training">勾选当前结果</button><button class="ghost compact" id="cluster-clear-training">清空</button></div></div>
+            <div class="cluster-filter-row"><label class="search"><span>⌕</span><input id="cluster-training-search" placeholder="搜索井名或层位"></label><label>层位<select id="cluster-formation-filter"><option value="">全部层位</option></select></label><label>措施影响<select id="cluster-intervention-filter"><option value="">不限</option><option value="yes">有措施事件</option><option value="no">无措施事件</option></select></label><label>措施样本口径<select id="cluster-segmentation-mode"><option value="split">措施前后拆分（推荐）</option><option value="whole">整井不拆分</option><option value="pre_only">仅措施前基线</option></select></label></div>
+            <div class="cluster-dataset-counts" id="cluster-dataset-counts"><div><span>当前筛选有效井</span><b>—</b></div><div><span>已选训练井</span><b>—</b></div><div><span>有效训练样本</span><b>—</b></div><p>措施前后各至少 3 个有效生产期才拆分；井级评价仍按整井汇总。</p></div>
+            <div class="cluster-dataset-layout"><div class="table-wrap cluster-well-table"><table><thead><tr><th><input type="checkbox" id="cluster-training-check-all" aria-label="全选当前井"></th><th>训练井</th><th>开发层位</th><th>有效期</th><th>空间</th><th>措施分段</th><th>指标完整度</th></tr></thead><tbody id="cluster-training-body"></tbody></table></div><aside class="cluster-well-inspector" id="cluster-well-inspector"><div class="cluster-inspector-empty"><i>⌁</i><b>单击一口井查看动态</b><span>这里显示生产曲线、措施时间和当前指标完整度。</span></div></aside></div>
+          </div>
+          <div class="cluster-stage-panel" data-cluster-stage="model">
+            <div class="cluster-stage-head"><div><span>04 · 网络/模型设计</span><h2>选择模型与结构</h2><p>先以可解释、可复现的无监督聚类建立基线；时序 Transformer 保留结构接口。</p></div></div>
+            <div class="cluster-model-grid">
+              <label class="cluster-model-card selected"><input type="radio" name="cluster-model" value="kmeans" checked><span><i>K</i><b>K-Means 基线</b><small>标准化、中位数补缺，适合快速形成可解释分型</small></span></label>
+              <label class="cluster-model-card"><input type="radio" name="cluster-model" value="som"><span><i>S</i><b>SOM 自组织映射</b><small>保留邻域拓扑关系，适合观察连续产能谱带与过渡型井</small></span></label>
+              <label class="cluster-model-card"><input type="radio" name="cluster-model" value="hierarchical"><span><i>H</i><b>层次聚类接口</b><small>用于观察井群树状关系；本版训练仍回落到基线引擎</small></span></label>
+              <label class="cluster-model-card transformer" id="cluster-transformer-card"><input type="radio" name="cluster-model" value="transformer"><span><i>T</i><b>时序 Transformer</b><small id="cluster-transformer-note">检查长序列样本后决定是否开放</small></span></label>
+            </div>
+            <div class="cluster-parameter-grid" id="cluster-model-parameters"></div>
+            <div class="cluster-architecture-builder">
+              <header><div><b>可交互网络结构</b><small>拖动模块调整顺序；节点数与功能可逐层设置</small></div><span id="cluster-architecture-recommendation">推荐节点：—</span><button class="ghost compact" type="button" id="cluster-reset-architecture">恢复推荐结构</button></header>
+              <div class="cluster-layer-palette"><span>添加模块</span><button type="button" data-architecture-add="normalize">＋ 标准化</button><button type="button" data-architecture-add="dense">＋ 全连接</button><button type="button" data-architecture-add="attention">＋ 注意力</button><button type="button" data-architecture-add="dropout">＋ Dropout</button><button type="button" data-architecture-add="som">＋ SOM 映射</button></div>
+              <div class="cluster-architecture-layers" id="cluster-architecture-layers"></div>
+            </div>
+          </div>
+          <div class="cluster-stage-panel" data-cluster-stage="preflight">
+            <div class="cluster-stage-head"><div><span>05 · 训练前检查</span><h2>训练流程自检</h2><p>逐项核对指标、样本、评价井和完整度；未通过项可直接跳回对应环节。</p></div><button class="secondary" type="button" id="cluster-run-preflight">重新自检</button></div>
+            <div class="cluster-check-list" id="cluster-check-list"></div>
+          </div>
+          <div class="cluster-stage-panel" data-cluster-stage="training">
+            <div class="cluster-stage-head"><div><span>06 · 模型训练</span><h2>训练并检查分群质量</h2><p>损失收敛和轮廓系数用于检查数值分离度；它们不替代地质合理性检查。</p></div><button class="primary" type="button" id="cluster-train-model">开始训练</button></div>
+            <div class="cluster-training-progress hidden" id="cluster-training-progress"><header><div><b id="cluster-progress-title">正在准备训练样本</b><span id="cluster-progress-detail">核对指标、样本和措施分段</span></div><strong id="cluster-progress-value">0%</strong></header><div class="cluster-progress-track"><i id="cluster-progress-bar"></i></div><div class="cluster-progress-steps" id="cluster-progress-steps"><span>样本构建</span><span>缺失补齐</span><span>标准化</span><span>模型迭代</span><span>质量评估</span></div></div>
+            <div class="cluster-training-empty" id="cluster-training-empty"><i>◎</i><b>尚未训练</b><span>完成前五步后点击“开始训练”</span></div>
+            <div class="cluster-training-result hidden" id="cluster-training-result"><div class="cluster-training-metrics" id="cluster-training-metrics"></div><div class="cluster-chart-grid"><div><div class="mini-head"><h3>训练损失</h3><span>越低越稳定</span></div><canvas id="cluster-loss-chart"></canvas></div><div><div class="mini-head"><h3>训练样本二维投影</h3><span id="cluster-projection-note">PCA 主成分投影 · 稳健显示范围</span></div><canvas id="cluster-scatter-chart"></canvas></div></div></div>
+          </div>
+          <div class="cluster-stage-panel" data-cluster-stage="evaluation">
+            <div class="cluster-stage-head"><div><span>07 · 批量评价</span><h2>选择需要评价的井</h2><p>可输入同一断裂带、井组或加密井的井名范围；当前先按层位与井名批量筛选。</p></div><div class="cluster-actions"><button class="ghost compact" id="cluster-select-visible-evaluation">勾选当前结果</button><button class="ghost compact" id="cluster-clear-evaluation">清空</button></div></div>
+            <label class="search cluster-evaluation-search"><span>⌕</span><input id="cluster-evaluation-search" placeholder="搜索井名、层位；也可粘贴多个井名"></label>
+            <div class="cluster-evaluation-list" id="cluster-evaluation-list"></div>
+          </div>
+          <div class="cluster-stage-panel" data-cluster-stage="results">
+            <div class="cluster-stage-head"><div><span>08 · 成果汇总</span><h2>井产能分型结果</h2><p>每口井保留整体类别、各指标级次、层位和措施标记，方便回到地质背景中解释。</p></div><div class="cluster-actions"><button class="secondary" type="button" id="cluster-save-training" disabled>保存训练信息</button><button class="secondary" type="button" id="cluster-export-results" disabled>导出评价 CSV</button></div></div>
+            <div class="cluster-result-explanation" id="cluster-result-explanation">类别按已选指标的有利方向排序：类型 1 / 第 1 级代表综合特征相对较好，序号越大代表相对偏弱；它不是储量等级。</div>
+            <div class="cluster-result-summary" id="cluster-result-summary"></div>
+            <div class="table-wrap cluster-result-table"><table><thead><tr><th>尚未训练</th></tr></thead><tbody><tr><td class="empty-state">训练完成后显示分类评价结果</td></tr></tbody></table></div>
+          </div>
+          <div class="cluster-stage-panel" data-cluster-stage="map">
+            <div class="cluster-stage-head"><div><span>09 · 二维展示</span><h2>井产能二维平面图</h2><p>按需勾选井，以生产指标控制泡泡大小、聚类标签控制颜色，并叠加选定 Polygon 解释边界。</p></div><button class="secondary" type="button" id="cluster-open-map-settings">显示设置</button></div>
+            <aside class="cluster-production-map cluster-production-map-full"><div class="cluster-map-commandbar"><label>泡泡大小属性<select id="cluster-map-metric"><option value="">训练后选择指标</option></select></label><button class="secondary compact" type="button" id="cluster-map-group-tool">▱ 井组圈定工具</button><span id="cluster-map-group-status">拖动矩形圈定井并保存井组</span></div><div class="cluster-map-workspace"><section><div class="cluster-map-object-picker"><label>对象类型<select id="cluster-map-object-type"><option value="well">井对象</option><option value="group">井组对象</option></select></label><label>具体对象<select id="cluster-map-object-select" multiple size="4"></select></label><button type="button" id="cluster-map-mount-object">挂载选中对象</button></div><label class="search small"><span>⌕</span><input id="cluster-map-search" placeholder="筛选井名"></label><div class="cluster-map-selection-head"><span id="cluster-map-selected-count">已选 0 口</span><button type="button" id="cluster-map-clear">清空</button></div><div id="cluster-map-wells" class="cluster-map-wells"><div class="empty-state">训练后显示井清单</div></div></section><div class="cluster-map-canvas-wrap"><canvas id="cluster-production-map-canvas"></canvas><div id="cluster-map-empty">勾选至少一口有坐标的井后显示</div><div class="cluster-map-selection-rect hidden" id="cluster-map-selection-rect"></div><div class="cluster-map-group-editor hidden" id="cluster-map-group-editor"><b id="cluster-map-group-candidate">已圈定 0 口井</b><input id="cluster-map-group-name" placeholder="输入井组名称"><button type="button" id="cluster-map-group-save">保存井组</button><button type="button" id="cluster-map-group-cancel">取消</button></div></div></div></aside><section class="cluster-group-statistics" id="cluster-group-statistics"><div class="empty-state">使用圈定工具保存井组后，可在这里勾选多个井组，查看去重后的生产特征与组间差异。</div></section>
+          </div>
+          <div class="cluster-stage-panel" data-cluster-stage="comparison"><div class="cluster-stage-head"><div><span>方案稳定性分析</span><h2>聚类结果对比</h2><p>比较共同井的类别位置、模型质量和 P10/P50/P90 稳定区间，识别对方案敏感的井。</p></div><button class="secondary" type="button" id="cluster-close-comparison">返回当前方案</button></div><div id="cluster-comparison-results"></div></div>
+          <footer class="cluster-stage-footer"><button class="ghost" type="button" id="cluster-prev-step">← 上一步</button><span id="cluster-step-status">第 1 / 9 步</span><button class="primary" type="button" id="cluster-next-step">下一步 →</button></footer>
+        </section>
+      </div>
+    </section>
+
+    <section class="page" id="page-models">
+      <div class="model-metrics" id="model-metrics"></div>
+      <div class="model-stage-flow"><div><span>地质认识</span><b>构造格架</b></div><i>→</i><div><span>空间表征</span><b>沉积相 / 属性</b></div><i>→</i><div><span>体积评价</span><b>储量 Case</b></div><i>→</i><div><span>动态模型</span><b>初始化 / PVT / SCAL</b></div><i>→</i><div><span>方案决策</span><b>历史拟合 / 预测</b></div></div>
+      <div class="grid two model-group-grid">
+        <article class="panel model-group-panel"><div class="panel-head"><div><span class="eyebrow">STATIC EARTH MODEL</span><h2>地质模型</h2><p>从构造格架到属性与储量评价成果</p></div><span class="model-group-count" id="geological-model-count">—</span></div><div class="model-type-list" id="geological-model-types"></div></article>
+        <article class="panel model-group-panel"><div class="panel-head"><div><span class="eyebrow">DYNAMIC RESERVOIR MODEL</span><h2>油藏模型</h2><p>从初始化与岩石流体到拟合、预测和结果</p></div><span class="model-group-count" id="reservoir-model-count">—</span></div><div class="model-type-list" id="reservoir-model-types"></div></article>
+      </div>
+      <article class="panel model-object-panel"><div class="panel-head"><div><h2>模型对象初筛</h2><p id="model-method">依据路径、文件名和扩展名进行轻量识别</p></div><div class="model-object-tools"><select id="model-group-filter"><option value="">全部模型</option><option value="geological">地质模型</option><option value="reservoir">油藏模型</option></select><div class="search small"><span>⌕</span><input id="model-search" placeholder="模型名 / 路径 / 类型"></div></div></div><div class="table-wrap model-object-table"><table><thead><tr><th>模型类别</th><th>对象类型</th><th>文件</th><th>目录</th><th>格式</th><th>大小</th><th>识别依据</th></tr></thead><tbody id="model-object-body"></tbody></table></div></article>
+      <div class="callout wide"><strong>统计口径</strong><p>当前只对完整目录索引做模型对象初筛，不直接打开大型三维属性体、ECLIPSE/CMG/tNavigator 结果或批量 Restart 数据。“已发现”表示可能存在相关对象，不等同于模型完整、版本正确或可计算；后续取得代表文件后，再增加网格规模、层数、属性数、Case 数、井数、时间步与预测方案等道头级解析。</p></div>
+    </section>
+
+    <section class="page" id="page-map">
+      <div class="toolbar map-toolbar"><label class="map-polygon-filter"><span>Polygon 筛选</span><select id="polygon-filter"><option value="">全部井</option></select></label><div class="map-tools"><button class="secondary" id="map-box-select" title="框选井">□ 框选</button><button class="ghost" id="map-zoom-in" title="放大">＋</button><button class="ghost" id="map-zoom-out" title="缩小">－</button><button class="ghost" id="map-fit" title="恢复 100%">100%</button></div><span id="map-view-status">100%</span><span id="map-count">—</span><a class="button secondary" id="map-export" href="/api/export/wells.csv">导出圈选结果</a></div>
+      <div class="map-workspace">
+        <aside class="panel map-object-panel"><header><div><span class="eyebrow">VISIBLE OBJECTS</span><h2>可见对象</h2><p>对象来自资料数据库；只绘制已勾选且具备空间坐标的数据。</p></div><span id="map-object-summary">读取中</span></header><div class="search map-object-search"><span>⌕</span><input id="map-object-search" placeholder="搜索对象名称或资料类型"></div><div class="map-object-actions"><button class="ghost" id="map-show-local-objects">显示局部</button><button class="ghost" id="map-hide-all-objects">全部隐藏</button></div><div class="map-object-tree" id="map-object-tree"><div class="empty-state">正在读取资料数据库对象…</div></div><footer id="map-object-note">Polygon、井点、DEV 和射孔可直接绘制；其他类型保留目录索引状态。</footer></aside>
+        <article class="panel map-panel"><canvas id="map-canvas"></canvas><div id="map-selection-box" class="map-selection-box hidden"></div><div id="map-empty" class="map-empty">导入含坐标的 well head 与 Polygon 后可进行空间圈选</div><div class="map-legend"><span><i class="map-symbol well"></i>井</span><span><i class="map-symbol polygon"></i>可见 Polygon</span><span><i class="map-symbol trajectory"></i>DEV / 射孔</span></div></article>
+      </div>
+      <article class="panel"><div class="panel-head"><div><h2>范围内井</h2><p>边界点按范围内处理</p></div></div><div class="table-wrap"><table><thead><tr><th>井名</th><th>X</th><th>Y</th><th>CRS</th><th>数据来源</th><th>曲线数</th></tr></thead><tbody id="map-wells-body"></tbody></table></div></article>
+    </section>
+
+    <section class="page" id="page-format-conversion">
+      <article class="panel format-conversion-intro"><div class="panel-head"><div><span class="eyebrow">LOCAL FORMAT NORMALIZATION</span><h2>格式转化</h2><p>针对常见工区导出格式建立可追溯的字段规整任务。源文件只读，转换结果在确认后另存为标准副本。</p></div><span>首批任务</span></div></article>
+      <div class="format-task-grid">
+        <article class="panel format-task-card"><div class="format-task-mark">XL</div><div><span class="eyebrow">EXCEL CONTENT NORMALIZATION</span><h2>射孔数据整理</h2><p>识别 Petrel 按井分块导出的射孔 / 挤注等完井事件，转换为统一的井名、时间、事件与深度段表。</p><div class="format-task-columns"><span>WELL NAME</span><span>TIME</span><span>COMPLETION TYPE</span><span>TOP</span><span>BASE</span><span>THICKNESS</span><span>WELLBORE DIAMETER</span></div></div><button class="primary" id="open-perforation-conversion">打开任务</button></article>
+      </div>
+      <article class="panel format-conversion-note"><b>工作方式</b><p>每项转化任务均在独立窗口内选择本地源文件、显示输入格式与字段映射、预览结果，再由操作人员下载标准副本。后续可继续增加 Well Head、Well Top、生产动态和解释结论的规整任务。</p></article>
+    </section>
+
+    <section class="page" id="page-directory-translation">
+      <article class="panel directory-translation-intro">
+        <div class="panel-head"><div><span class="eyebrow">LOCAL DISPLAY ALIASES</span><h2>目录翻译</h2><p>将西语、英语等文件名转换为软件内的中文显示名，便于资料检索与浏览。</p></div><span>源文件只读</span></div>
+        <div class="directory-translation-guard"><b>不改名 · 不复制 · 不读取文件内容</b><p>此功能仅遍历指定目录的文件名，并把“原文 → 中文显示名”存入当前工区。文件在磁盘上的原始名称、路径、时间和内容均不会被修改；未知井名、编号和专业缩写会保留原样。</p></div>
+      </article>
+      <article class="panel directory-translation-controls">
+        <div class="directory-translation-fields">
+          <label>需要翻译的本地目录<div class="path-picker"><input id="directory-translation-folder" placeholder="选择一个包含外语命名资料的文件夹"><button type="button" class="ghost compact" id="directory-translation-pick">浏览</button></div><small>递归处理目录下的文件名；只记录显示别名。</small></label>
+          <label>补充术语表（可选）<textarea id="directory-translation-glossary" rows="4" placeholder="例如：\naceite = 原油\ncuenca = 盆地\nmi_campo = 我的油田"></textarea><small>一行一条：原词 = 中文。优先于内置的常见油气术语表。</small></label>
+        </div>
+        <div class="directory-translation-actions"><button type="button" class="primary" id="directory-translation-run">生成软件内中文显示名</button><span id="directory-translation-status">请选择目录后开始；不调用外部翻译服务。</span></div>
+      </article>
+      <article class="panel directory-translation-results">
+        <div class="panel-head"><div><h2>翻译结果</h2><p id="directory-translation-summary">尚未选择目录。完成后可在此搜索原文或中文显示名。</p></div><div class="search directory-translation-search"><span>⌕</span><input id="directory-translation-search" placeholder="搜索原文、中文显示名或相对路径"></div></div>
+        <div class="table-scroll"><table class="directory-translation-table"><thead><tr><th>原始文件名</th><th>软件内中文显示名</th><th>相对目录</th><th>扩展名</th></tr></thead><tbody id="directory-translation-body"><tr><td colspan="4" class="empty-state">目录翻译结果会显示在这里</td></tr></tbody></table></div>
+        <div class="pagination directory-translation-pagination"><span id="directory-translation-page">—</span><div><button type="button" class="ghost" id="directory-translation-prev">上一页</button><button type="button" class="ghost" id="directory-translation-next">下一页</button></div></div>
+      </article>
+    </section>
+
+    <section class="page" id="page-data-export">
+      <article class="panel data-export-intro">
+        <div class="panel-head"><div><span class="eyebrow">ORIGINAL DATA DELIVERY</span><h2>按统一井与曲线类型导出数据</h2><p>导出副本不会改写原始目录；LAS 按已确认或自动建议的曲线类型筛选，DEV 每口统一井仅保留一条有效轨迹。</p></div><span class="data-export-filter-state" id="data-export-filter-state">读取工区状态中</span></div>
+        <div class="data-export-scope"><label><input type="checkbox" id="data-export-map-scope" disabled>仅导出当前空间圈选范围内的井</label><span id="data-export-map-scope-note">尚未进入空间圈选，默认按当前井点筛选范围导出全工区。</span></div>
+      </article>
+      <div class="data-export-grid">
+        <article class="panel data-export-card">
+          <div class="panel-head"><div><h2>导出 LAS 曲线</h2><p>勾选一个或多个曲线类型；一个 LAS 只要包含任一选中类型即完整保留，不截取或重采样。</p></div><button class="ghost compact" id="data-export-refresh-types">刷新类型</button></div>
+          <div class="data-export-type-toolbar"><label><input type="checkbox" id="data-export-select-all-types">全选当前可导出类型</label><span id="data-export-las-summary">正在读取曲线类型…</span></div>
+          <div class="data-export-type-list" id="data-export-curve-types"><div class="empty-state">正在读取曲线类型…</div></div>
+          <div class="data-export-actions"><button class="secondary" id="data-export-build-profile">建立完整 LAS 头段清单</button><button class="primary" id="data-export-las">下载 LAS ZIP</button></div>
+          <p class="data-export-note" id="data-export-las-note">完整清单只读取 LAS 头段、遇到 ~A 数据段即停止；用于保证按曲线类型筛选时不漏掉文件。</p>
+        </article>
+        <article class="panel data-export-card">
+          <div class="panel-head"><div><h2>导出井轨迹 DEV</h2><p>先逐文件判定有效测点。对同一统一井存在多份轨迹时，空轨迹跳过；多条有效轨迹只导出有效测点最多的一条。</p></div></div>
+          <div class="data-export-trajectory-summary" id="data-export-trajectory-summary"><div><span>候选统一井</span><b>—</b></div><div><span>存在多份 DEV</span><b>—</b></div><div><span>导出策略</span><b>有效测点最多</b></div></div>
+          <div class="data-export-trajectory-rule"><b>去重口径</b><p>以“统一井名 / 已确认别名”作为同名轨迹集合；不会因为文件名不同而重复导出同一口井。若两条轨迹有效测点数相同，则按路径字母顺序稳定选择，并在清单中保留全部候选路径。</p></div>
+          <div class="data-export-actions single"><button class="primary" id="data-export-trajectories">下载 DEV ZIP</button></div>
+          <p class="data-export-note">压缩包内附“井轨迹导出清单.csv”，含选中路径、有效测点数、跳过空文件和重复有效文件数量。</p>
+        </article>
+      </div>
+      <article class="panel data-export-result" id="data-export-result"><div class="panel-head"><div><h2>导出状态</h2><p>导出完成后原始文件仍保留在其本地目录中。</p></div></div><div class="empty-state">选择数据类型后开始导出</div></article>
+    </section>
+  </main>
+
+  <div class="toast" id="toast"></div>
+  <aside class="tree-hover-card hidden" id="tree-hover-card"></aside>
+  <div class="global-filter-banner hidden" id="global-filter-banner"><span><i></i><b>井点筛选已激活</b><em id="global-filter-summary">—</em></span><div><button class="ghost" id="edit-global-filter">编辑条件</button><button class="ghost" id="clear-global-filter">清除</button></div></div>
+  <section class="floating-tool-window hidden" id="floating-tool-window">
+    <header class="floating-tool-head" id="floating-tool-head"><span>⊞</span><div><b>筛选与显示</b><small>可拖动 · 可调整大小</small></div><button id="floating-tool-close" aria-label="关闭">×</button></header>
+    <div class="floating-tool-body"><nav><button class="active" data-floating-tool="search">⌕ 数据搜索</button><button data-floating-tool="jobs">任务中心</button><button data-floating-tool="data">数据管理</button><button data-floating-tool="filters">井点筛选</button><button data-floating-tool="curvefilters">曲线筛选</button><button data-floating-tool="maplayers">地图图层</button><button data-floating-tool="productionmap">产能图设置</button><button data-floating-tool="future">＋ 预留工具</button></nav><div class="floating-tool-content">
+      <div class="floating-tool-panel active" id="floating-tool-search"><div class="mini-head"><h3>搜索工区资料</h3><span id="tool-search-status">输入文件名或路径</span></div><div class="tool-data-search"><div class="search"><span>⌕</span><input id="tool-data-search-input" placeholder="例如 WELL-A、GR、survey.sgy"></div><select id="tool-data-search-category"><option value="">全部资料类型</option></select><button class="primary" id="tool-data-search-run">搜索</button></div><p class="tool-search-help">搜索完整目录索引，不读取原文件内容。单击“定位”会展开并高亮左侧资料树中的对象。</p><div id="tool-data-search-results" class="tool-search-results empty-state">输入关键词，或选择一个资料类型开始浏览</div></div>
+      <div class="floating-tool-panel" id="floating-tool-jobs"><div class="mini-head"><h3>后台任务</h3><span id="job-center-status">暂无任务</span></div><div id="job-center-list" class="empty-state">导入和分析任务会显示在这里</div></div>
+      <div class="floating-tool-panel" id="floating-tool-data"><div class="mini-head"><h3>二维要素管理</h3><span id="display-layer-status">勾选后立即重绘井分布</span></div><p class="tool-search-help">这里管理显示对象，不修改数据库，也不改变井点筛选结果。</p><div class="display-manager">
+        <section><header><b>井</b><label class="display-toggle"><input type="checkbox" id="display-wells" checked><span>显示井点</span></label></header><div class="display-fields"><label class="display-control display-toggle"><input type="checkbox" id="display-labels" checked><span>显示井名</span></label><label class="display-control display-toggle"><input type="checkbox" id="display-label-collision" checked><span>井名自动避让</span></label><label class="display-control"><span>字号</span><input type="number" id="display-label-size" min="7" max="24" value="10"></label><label class="display-control"><span>井点颜色</span><input type="color" id="display-point-color" value="#b9e94b"></label><label class="display-control"><span>井点大小</span><input type="number" id="display-point-size" min="1" max="14" step="0.5" value="3"></label></div><small>自动避让仅在当前缩放下存在近邻空位时生效；密集井区保留贴近井点的默认标签，建议继续放大查看。</small></section>
+        <section><header><b>井轨迹</b><label class="display-toggle"><input type="checkbox" id="display-trajectories"><span>显示 DEV</span></label></header><div class="display-fields"><label class="display-control"><span>轨迹颜色</span><input type="color" id="display-trajectory-color" value="#49b7b0"></label><label class="display-control"><span>线宽</span><input type="number" id="display-trajectory-width" min="0.5" max="6" step="0.5" value="2"></label></div><small>首次打开时按需读取每口井一份 DEV；绘图会自动用浅色描边提升可见性。</small></section>
+        <section><header><b>生产动态</b><label class="display-toggle"><input type="checkbox" id="display-perforations"><span>射孔层段</span></label></header><div class="display-fields"><label class="display-control"><span>射孔颜色</span><input type="color" id="display-perforation-color" value="#ffb24a"></label><label class="display-control"><span>加粗宽度</span><input type="number" id="display-perforation-width" min="2" max="12" value="6"></label></div></section>
+        <section><header><b>测井曲线覆盖</b><label class="display-toggle"><input type="checkbox" id="display-curve-enabled"><span>覆盖井着色</span></label></header><div class="display-fields"><label class="display-control"><span>曲线</span><select id="display-curve"><option value="">选择曲线</option></select></label><label class="display-control"><span>颜色</span><input type="color" id="display-curve-color" value="#a879ff"></label></div><small>只改变具备该曲线井的符号颜色。</small></section>
+        <section><header><b>边界</b><span>二维显示</span></header><div class="display-fields"><label class="display-control display-toggle"><input type="checkbox" id="display-seismic-boundaries" checked><span>显示地震边界</span></label><label class="display-control display-toggle"><input type="checkbox" id="display-polygon-boundaries" checked><span>显示普通边界 / Polygon</span></label></div><small>仅影响二维投影显示，不改变井点筛选与统计口径。</small></section>
+        <section><header><b>Polygon</b><span id="display-polygon-count">尚未加载</span></header><div id="display-polygon-list" class="display-polygon-list"></div></section>
+      </div></div>
+      <div class="floating-tool-panel" id="floating-tool-filters"><div class="mini-head"><h3>井点筛选</h3><span>决定参与统计和二维显示的井集合</span></div><div class="filter-global-logic"><span>类别之间</span><select id="filter-global-logic"><option value="AND">AND · 同时满足</option><option value="OR">OR · 任一满足</option></select></div><div id="filter-groups"></div><button class="secondary full" id="add-filter-condition">＋ 增加筛选条件</button><button class="primary full" id="apply-global-filter">应用井点筛选</button></div>
+      <div class="floating-tool-panel" id="floating-tool-curvefilters"><div class="mini-head"><h3>曲线筛选</h3><span id="curve-filter-well-base">以井点筛选结果为井集合基础</span></div><p class="tool-search-help">这里筛的是曲线对象，不改变井点筛选；曲线值分布读取两者交集。</p><div class="curve-filter-form">
+        <label class="curve-filter-active"><input type="checkbox" id="curve-filter-active" checked><span>启用曲线筛选</span></label>
+        <label>原始曲线字段 / mnemonic<select id="curve-filter-mnemonics" multiple size="5"></select><small>不选表示保留全部字段；可按 Ctrl / Shift 多选</small></label>
+        <label>统一曲线类型<select id="curve-filter-types" multiple size="4"></select><small>可同时筛选 GR、密度、电阻率等多个类型</small></label>
+        <label>分类状态<select id="curve-filter-classification"><option value="all">全部分类状态</option><option value="classified">已经划分类型</option><option value="confirmed">仅人工确认</option><option value="automatic">仅自动建议</option><option value="unclassified">未分类</option></select></label>
+        <label>指定井（在井点筛选结果内进一步过滤）<select id="curve-filter-wells" multiple size="5"></select><small>不选表示使用井点筛选后的全部井</small></label>
+        <label>层段过滤<select id="curve-filter-layer-mode"><option value="all">全部深度</option><option value="md">固定 MD 区间</option><option value="horizon_window">某层位上下窗</option><option value="between_horizons">两个层位之间</option></select></label>
+        <div id="curve-filter-layer-md" class="curve-filter-layer hidden"><label>顶 MD<input type="number" step="any" id="curve-filter-top-md"></label><label>底 MD<input type="number" step="any" id="curve-filter-base-md"></label></div>
+        <div id="curve-filter-layer-horizon" class="curve-filter-layer hidden"><label>层位<select id="curve-filter-horizon"></select></label><label>向上 / m<input type="number" min="0" step="any" value="25" id="curve-filter-offset-above"></label><label>向下 / m<input type="number" min="0" step="any" value="25" id="curve-filter-offset-below"></label></div>
+        <div id="curve-filter-layer-between" class="curve-filter-layer hidden"><label>上界层位<select id="curve-filter-top-horizon"></select></label><label>下界层位<select id="curve-filter-base-horizon"></select></label></div>
+      </div><div class="curve-filter-actions"><button class="ghost" id="clear-curve-filter">清除</button><button class="primary" id="apply-curve-filter">应用曲线筛选</button></div></div>
+      <div class="floating-tool-panel" id="floating-tool-maplayers"><div class="mini-head"><h3>Polygon 图层</h3><span>超大边界默认隐藏，可按需开启</span></div><div class="search map-layer-search"><span>⌕</span><input id="map-layer-search" placeholder="搜索 Polygon"></div><div class="map-layer-actions"><button class="ghost" id="map-local-layers">显示局部图层</button><button class="ghost" id="map-hide-layers">隐藏全部</button></div><div id="map-layer-list" class="map-layer-list empty-state">进入空间圈选后加载图层</div></div>
+      <div class="floating-tool-panel" id="floating-tool-productionmap"><div class="mini-head"><h3>产能二维图设置</h3><span>仅影响 09 二维展示</span></div><div class="cluster-map-settings"><label>泡泡大小倍率<input id="cluster-map-bubble-scale" type="range" min="0.5" max="2.5" step="0.1" value="1"></label><label>泡泡透明度<input id="cluster-map-opacity" type="range" min="0.25" max="1" step="0.05" value="0.78"></label><label><input id="cluster-map-show-labels" type="checkbox" checked> 显示井名</label><label><input id="cluster-map-show-grid" type="checkbox" checked> 显示坐标网格</label><label>赋色方式<select id="cluster-map-color-mode"><option value="category">按聚类类型</option><option value="rank">按产能相对级次</option></select></label><section class="cluster-map-polygon-settings"><header><b>Polygon 图层</b><span id="cluster-map-polygon-count">尚未读取</span></header><label class="search small"><span>⌕</span><input id="cluster-map-polygon-search" placeholder="搜索 Polygon"></label><div class="cluster-map-polygon-actions"><button type="button" id="cluster-map-polygon-local">显示局部图层</button><button type="button" id="cluster-map-polygon-clear">隐藏全部</button></div><div id="cluster-map-polygon-list" class="cluster-map-polygon-list"><div class="empty-state">打开 09 二维展示后读取</div></div></section><p>泡泡大小由第 09 步选择的产能指标控制；Polygon 只用于空间背景，不改变井的分型结果。</p></div></div>
+      <div class="floating-tool-panel" id="floating-tool-future"><div class="future-tool-slot"><span>＋</span><b>新工具入口预留</b><p>以后新增独立分析工具时，可在这里以浮窗方式打开，不占用主页面。</p></div></div>
+    </div></div>
+  </section>
+  <section class="curve-detail-window hidden" id="curve-detail-window" role="dialog" aria-labelledby="curve-detail-title">
+    <header class="curve-detail-head" id="curve-detail-head"><span>〽</span><div><b id="curve-detail-title">曲线详情</b><small id="curve-detail-subtitle">覆盖井与数值分布</small></div><button id="curve-detail-close" aria-label="关闭">×</button></header>
+    <div class="curve-detail-body">
+      <div class="curve-detail-metrics" id="curve-detail-metrics"></div>
+      <section class="curve-detail-section curve-well-section">
+        <header><div><h3>有此曲线的井</h3><span id="curve-detail-well-count">—</span></div><div><label class="curve-detail-search"><span>⌕</span><input id="curve-detail-well-search" placeholder="搜索井名"></label><button class="ghost" id="curve-detail-copy-wells">复制井名</button></div></header>
+        <div class="curve-detail-wells" id="curve-detail-wells"></div>
+      </section>
+      <section class="curve-detail-section curve-histogram-section" id="curve-detail-histogram-section">
+        <header><div><h3>曲线数值分布</h3><span>按需读取代表 LAS 样点，不改写源文件</span></div><b id="curve-detail-histogram-range">正在读取…</b></header>
+        <div class="curve-detail-chart"><canvas id="curve-detail-histogram"></canvas><div class="curve-histogram-tooltip hidden" id="curve-histogram-tooltip"></div><div class="curve-detail-chart-empty" id="curve-detail-chart-empty">正在读取数值样点…</div></div>
+        <footer><span>横轴：曲线实际值</span><span>纵轴：样点占比</span><span>悬浮柱体查看值域、样点数与占比</span></footer>
+      </section>
+    </div>
+  </section>
+  <dialog id="well-dialog"><button class="dialog-close" aria-label="关闭">×</button><div id="well-detail"></div></dialog>
+  <dialog id="overview-drilldown-dialog" class="overview-drilldown-dialog">
+    <button class="dialog-close overview-drilldown-close" aria-label="关闭">×</button>
+    <div class="overview-drilldown-head">
+      <span class="eyebrow">OVERVIEW DETAIL</span>
+      <h2 id="overview-drilldown-title">统计明细</h2>
+      <p id="overview-drilldown-note">卡片数字与下方明细使用相同的当前工区与井点筛选范围。</p>
+    </div>
+    <div id="overview-drilldown-content" class="overview-drilldown-content">
+      <div class="empty-state">正在读取统计明细…</div>
+    </div>
+  </dialog>
+  <dialog id="software-about-dialog" class="software-about-dialog"><button class="dialog-close software-about-close" aria-label="关闭">×</button><div class="software-about-hero"><div class="software-about-mark">G</div><div><span class="eyebrow">ABOUT GEOINVENTORY</span><h2>地数镜</h2><p>面向老油田旧资料的本地化数据清查、完备度评估与空间关联软件。</p></div></div><div class="software-about-grid"><section><span>核心目标</span><b>先看清资料，再开始解释</b><p>统一井身份，梳理测井与解释版本，核对地震、层位、断层和 Polygon 的空间覆盖。</p></section><section><span>数据原则</span><b>原始文件只读</b><p>大型 SEG-Y 只扫描道头；.nvt 保存索引、数据库和分析进度，不改写源数据。</p></section><section><span>主要能力</span><b>井—层—曲线—空间联动</b><p>支持 Well Head、LAS、DEV、Well Top、岩心、解释结论、SEG-Y、层位、断层和生产动态。</p></section><section><span>当前版本</span><b id="software-version-label">GeoInventory</b><p>工区格式支持打开时原位升级，并明确记录迁移版本。</p></section></div><div class="software-credits"><div><span>使用权限</span><b>源代码可见 · 商业使用须书面许可</b></div><div><span>作者 / Author</span><b>朱思成 · Zhu Sicheng · zhusc.syky@sinopec.com</b></div></div><div class="software-about-footer"><img class="software-about-mini-logo" src="{{ url_for('static', filename='assets/sinopec-mini.png') }}" alt="SINOPEC / 中国石化商标，权利归其所有"><span>商标仅作单位说明，不代表官方认可 · GeoInventory Local First</span></div></dialog>
+  <dialog id="relationship-search-dialog" class="relationship-search-dialog">
+    <button class="dialog-close relationship-search-close" aria-label="关闭">×</button>
+    <div class="relationship-search-head"><div><span class="eyebrow">RELATIONSHIP SEARCH</span><h2>工区关联检索</h2><p>先选择检索模式，再用逗号分隔对象。模糊井名只生成本次候选，不自动合并。</p></div><span>完整工区 · 只读</span></div>
+    <div class="relationship-modes" role="tablist" aria-label="关联检索模式"><button class="active" type="button" data-relationship-mode="single">单井－层位－曲线</button><button type="button" data-relationship-mode="single_object">单要素</button><button type="button" data-relationship-mode="multi_well">多井对比</button><button type="button" data-relationship-mode="multi_layer">单井－多层位</button></div>
+    <form id="relationship-search-form"><div class="relationship-query"><span>⌕</span><input id="relationship-search-input" autocomplete="off" placeholder="例如：Ebano-3000, KSF, GR"><button class="primary" type="submit">关联检索</button></div></form>
+    <div class="relationship-mode-help" id="relationship-mode-help"><b>单井关联链</b><span>井名, 层位, 曲线；未指定层位或曲线时仍返回该井可用对象。</span></div>
+    <div id="relationship-search-result" class="relationship-search-empty"><div><b>井 → Well Top / 构造面 → LAS 曲线 → DEV / 射孔</b><span>系统会明确区分“资料不存在”“尚未计算”和“名称只是模糊匹配”。</span></div></div>
+  </dialog>
+  <dialog id="comparison-dialog" class="comparison-dialog">
+    <button class="dialog-close comparison-close" aria-label="关闭">×</button>
+    <div class="relationship-search-head"><div><span class="eyebrow">EVIDENCE COMPARISON</span><h2>资料对比窗</h2><p>逐项核验来源，比较并不自动合并或覆盖原始资料。</p></div><span>本地只读</span></div>
+    <div class="comparison-modes" role="tablist"><button class="active" type="button" data-comparison-mode="well">同井资料核验</button><button type="button" data-comparison-mode="curve">曲线覆盖对比</button><button type="button" data-comparison-mode="horizon">层位覆盖对比</button><button type="button" data-comparison-mode="multiwell">多井综合对比</button></div>
+    <div class="comparison-picker"><aside class="comparison-source"><div class="mini-head"><div><h3 id="comparison-source-title">井数据树</h3><p id="comparison-source-note">搜索后点击或拖拽井名到右侧</p></div><span id="comparison-source-count">—</span></div><label class="comparison-source-search"><span>⌕</span><input id="comparison-source-search" placeholder="搜索对象名称"></label><div id="comparison-source-tree" class="comparison-source-tree"><div class="empty-state">打开对比窗后按当前模式读取对象索引</div></div></aside><section class="comparison-target"><div class="comparison-target-head"><div><span class="eyebrow">COMPARISON TARGETS</span><h3 id="comparison-target-title">选择一口井</h3><p id="comparison-target-note">可点击左侧对象，或直接拖拽至下方区域。</p></div><button class="ghost compact" type="button" id="comparison-clear-targets">清空</button></div><div id="comparison-dropzone" class="comparison-dropzone" tabindex="0">将左侧对象拖到此处</div><div id="comparison-selected" class="comparison-selected"></div><form id="comparison-form" class="comparison-form"><label id="comparison-query-label"><span>井名</span><input id="comparison-query" placeholder="例如：Ebano-3000 或 E-3000"></label><button class="primary" type="submit">开始对比</button><button class="secondary hidden" type="button" id="comparison-export-reconstruction">重构并导出四类资料</button></form></section></div>
+    <p id="comparison-help" class="comparison-help">左侧提供当前工区的对象树；手动输入仍可用于未显示的名称或粘贴多个对象。</p>
+    <div id="comparison-result" class="comparison-result empty-state"><div><b>选择对比类型并输入对象</b><span>井名支持与检索窗一致的缩写、符号忽略和相似匹配。</span></div></div>
+  </dialog>
+  <dialog id="workspace-dialog" class="workspace-dialog"><button class="dialog-close workspace-close" aria-label="关闭">×</button><div class="detail-head"><span class="eyebrow">NVT ANALYSIS WORKSPACE</span><h2>分析工区</h2><p>保存数据库、人工分类、筛选条件和分析过程；原始数据仍引用本地目录。</p></div><div class="workspace-state" id="workspace-state">正在读取工区状态…</div><label>工区文件夹路径<input id="workspace-path" placeholder="E:\Project\ProjectName.nvt"></label><div class="workspace-actions"><button class="secondary" id="open-workspace">打开 .nvt 工区</button><button class="primary" id="save-workspace">保存当前工区</button></div><button class="secondary full" id="workspace-directory-export">目录文件拷贝</button><div class="callout"><strong>版本迁移策略</strong><p>旧工区打开时会直接升级数据库结构和界面状态，并显示迁移提示；按你的要求不自动创建备份。</p></div></dialog>
+  <dialog id="perforation-conversion-dialog" class="perforation-conversion-dialog"><button class="dialog-close perforation-conversion-close" aria-label="关闭">×</button><div class="detail-head"><span class="eyebrow">PETREL PERFORATION EXPORT</span><h2>射孔数据整理</h2><p>从 Petrel 的按井分块 Excel 中抽取完井事件与深度段，输出统一的标准射孔表。</p></div><div class="conversion-schema"><section><b>可识别的输入格式</b><p>块头行：A 列为 <code>WELLNAME</code>，B 列为井名；随后的明细行依次为 A 时间、B 完井事件、C TOP、D BASE、E 井筒直径。</p><small>标准厚度由 <code>BASE − TOP</code> 重算；Petrel 的 E 列为 Wellbore Diameter，不是层段厚度。原表末三列若为全 0 / 空值，会被识别并排除。</small></section><section><b>标准输出字段</b><div class="conversion-output-columns"><span>WELL NAME</span><span>TIME</span><span>COMPLETION TYPE</span><span>TOP</span><span>BASE</span><span>THICKNESS</span><span>WELLBORE DIAMETER</span></div><small>日期会标准化为 yyyy-mm-dd；THICKNESS 按 BASE − TOP 计算；井筒直径保留原始数值与原始单位体系。</small></section></div><div class="conversion-file-picker"><label>当前预览文件<input id="perforation-conversion-path" placeholder="浏览 Excel 后自动填入；也可粘贴可访问的本机路径"></label><div class="conversion-file-actions"><button class="secondary" id="browse-perforation-conversion-files" type="button">浏览 Excel</button><button class="secondary" id="browse-perforation-conversion-folder" type="button">浏览文件夹</button></div><button class="primary" id="preview-perforation-conversion">读取并预览</button><input id="perforation-conversion-native-files" class="conversion-native-input" type="file" accept=".xlsx,.xlsm" multiple><input id="perforation-conversion-folder-files" class="conversion-native-input" type="file" accept=".xlsx,.xlsm" webkitdirectory directory multiple></div><div class="conversion-queue-head"><div><b>待转换文件</b><span id="perforation-conversion-queue-note">可一次加入多个 Excel；源文件保持不变。</span></div><label class="check-row compact"><input id="perforation-conversion-select-all" type="checkbox" checked><span>全选</span></label></div><div class="conversion-queue empty-state" id="perforation-conversion-queue">尚未加入 Excel 文件</div><div class="conversion-output-picker"><label>批量输出目录<input id="perforation-conversion-output-dir" placeholder="选择或粘贴用于保存标准 Excel 的本机文件夹"></label><button class="secondary" id="pick-perforation-conversion-output" type="button">选择输出目录</button><button class="primary" id="export-perforation-conversion-batch" type="button" disabled>批量转换到此目录</button></div><div class="conversion-metrics" id="perforation-conversion-metrics"><div><span>识别井</span><b>—</b></div><div><span>射孔 / 完井记录</span><b>—</b></div><div><span>完井事件类型</span><b>—</b></div><div><span>输入格式</span><b>等待读取</b></div></div><div class="conversion-status" id="perforation-conversion-status">点击“浏览 Excel”可直接打开本机文件选择器；批量加入后，选择输出目录即可一次生成标准副本。</div><div class="conversion-preview-head"><div><b>转换结果预览</b><span id="perforation-conversion-preview-note">最多显示前 100 条标准记录</span></div><button class="secondary" id="download-perforation-conversion" disabled>下载当前标准 Excel</button></div><div class="table-wrap conversion-preview-table"><table><thead><tr><th>WELL NAME</th><th>TIME</th><th>COMPLETION TYPE</th><th>TOP</th><th>BASE</th><th>THICKNESS<br>(BASE − TOP)</th><th>WELLBORE DIAMETER<br>(原 E 列)</th></tr></thead><tbody id="perforation-conversion-preview"><tr><td colspan="7" class="empty-state">尚未读取源文件</td></tr></tbody></table></div></dialog>
+  <dialog id="well-group-dialog" class="well-group-dialog"><button class="dialog-close well-group-close" aria-label="关闭">×</button><div class="detail-head"><span class="eyebrow">CUSTOM WELL GROUPS</span><h2>定制井组管理</h2><p>建立交付范围、维护成员；“合并预览”只显示井组并集，不会合并井名或坐标。</p></div><div class="well-group-create"><label>井组名称<input id="well-group-name" placeholder="例如：北部重点评价井"></label><label>说明<input id="well-group-description" placeholder="可选：交付用途、版本或责任人"></label><button class="primary" id="well-group-create">新建井组</button></div><div class="well-group-layout"><aside><div class="mini-head"><h3>已建井组</h3><span id="well-group-count">—</span></div><div id="well-group-list" class="well-group-list"></div><button class="ghost full" id="well-group-preview">合并预览（已选井组）</button></aside><section><div class="well-group-member-head"><div><h3 id="well-group-member-title">选择一个井组</h3><p id="well-group-member-note">在右侧勾选成员后保存。</p></div><div class="search small"><span>⌕</span><input id="well-group-well-search" placeholder="搜索井名 / 井键"></div></div><div id="well-group-members" class="well-group-members empty-state">先选择或新建井组</div><div class="well-group-member-actions"><button class="ghost" id="well-group-select-filtered">勾选当前结果</button><button class="ghost" id="well-group-clear-members">清空成员</button><button class="primary" id="well-group-save-members">保存成员</button></div></section></div></dialog>
+  <dialog id="directory-export-dialog" class="directory-export-dialog"><button class="dialog-close directory-export-close" aria-label="关闭">×</button><div class="detail-head"><span class="eyebrow">STANDARD DELIVERY DIRECTORY</span><h2>目录文件拷贝</h2><p>将定制井组资料复制到一个新的交付目录；原始数据不会被修改。</p></div><div class="directory-export-form"><label>交付目录上级文件夹<div class="path-picker"><input id="directory-export-parent" readonly placeholder="选择本机文件夹"><button class="secondary" id="pick-directory-export-parent">选择文件夹</button></div></label><label>目标文件夹名称<input id="directory-export-name" value="标准工区交付" placeholder="例如：项目A_北部井组_20260914"></label><label>井组范围<select id="directory-export-group"><option value="">全部统一井</option></select></label></div><div class="directory-export-categories" id="directory-export-categories"><label><input type="checkbox" value="well_heads" checked>Well head</label><label><input type="checkbox" value="well_logs" checked>Well LAS</label><label><input type="checkbox" value="well_paths" checked>Well DEV</label><label><input type="checkbox" value="well_tops" checked>Well top</label><label><input type="checkbox" value="production" checked>Well production</label><label><input type="checkbox" value="seismic_3d">3D 地震</label><label><input type="checkbox" value="seismic_2d">2D 地震</label><label><input type="checkbox" value="polygons">Polygon</label><label><input type="checkbox" value="horizons">层位</label><label><input type="checkbox" value="faults">断层</label><label><input type="checkbox" value="core">岩心</label><label><input type="checkbox" value="interpretations">解释结论</label></div><div class="callout"><strong>生产动态说明</strong><p>MDB 会以全工区只读副本复制；同目录的 <code>WellProduction_SelectedWells.csv</code> 是按照当前井组筛选的标准汇总，不会伪造一个已过滤的 Access MDB。</p></div><button class="primary full" id="run-directory-export">开始复制到新目录</button><p id="directory-export-status" class="directory-export-status">选择上级文件夹、填写新目录名后开始。</p></dialog>
+  <dialog id="scan-dialog" class="scan-dialog"><button class="dialog-close scan-close" aria-label="关闭">×</button><div class="detail-head"><span class="eyebrow">REPRESENTATIVE SCAN</span><h2>扫描项目目录</h2><p>只读取文件元数据和每个文件夹的一个代表样本；SEG-Y 仅扫描道头并跳过振幅。</p></div><form id="project-scan-form"><label>项目数据根目录<input name="root" id="project-root" value="" placeholder="例如：E:\Project\Export"></label><label class="check-row"><input type="checkbox" name="scan_surface_values" checked><span>完整统计一份 PTD Surface 的有效网格（约增加几十秒）</span></label><div class="scan-notes"><span>✓ 不复制大型原始数据</span><span>✓ 每目录最多解析一个 LAS/DEV</span><span>✓ SEG-Y 不解码振幅</span></div><button class="primary full" type="submit">开始代表性扫描</button><div class="scan-progress hidden" id="scan-progress"><i></i><span>正在读取代表文件，请保持窗口开启…</span></div></form></dialog>
+  <aside class="ofm-help-card hidden" id="ofm-help-card" role="tooltip"><span>OFM TABLE GUIDE</span><strong id="ofm-help-title">表说明</strong><p id="ofm-help-purpose"></p><p id="ofm-help-stores"></p><small id="ofm-help-note"></small><em id="ofm-help-availability"></em></aside>
+  <script src="/static/app.js"></script>
+  <script src="/static/cockpit.js"></script>
+  <script src="/static/enhancements.js"></script>
+  <script src="/static/production-clustering.js"></script>
+  <script src="/static/seismic-workbench.js"></script>
+  <script src="/static/project-hub-fallback.js?v=20260905-1"></script>
+</body>
+</html>

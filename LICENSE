@@ -1,0 +1,112 @@
+GeoInventory Source-Available Commercial License
+地数镜源代码可见商业许可证
+Version 1.0, 14 September 2026
+
+Copyright (c) 2026 Zhu Sicheng (朱思成). All rights reserved.
+
+ENGLISH TERMS
+
+1. Definitions
+“Software” means the GeoInventory source code, documentation, user interface,
+assets, and other materials distributed with this license, excluding Third-Party
+Materials. “Licensor” means Zhu Sicheng or another lawful copyright holder where
+applicable. “You” means any person or entity accessing the Software.
+
+2. Limited permission
+Subject to these terms, You may view the Software through its authorized GitHub
+repository and may run one unmodified copy solely for personal, non-production,
+non-commercial evaluation. No other rights are granted.
+
+3. Written permission required
+Prior written permission from the Licensor is required for any production,
+organizational, governmental, educational-service, consulting, revenue-generating,
+or other commercial use; and for copying, modification, translation, publication,
+distribution, sublicensing, resale, hosting for third parties, or creation of
+derivative works. Permission requests must identify the intended users, purpose,
+deployment environment, term, and distribution scope.
+
+4. Attribution and notices
+Any use separately authorized in writing must retain this license, copyright,
+author attribution, citation metadata, and all legal notices. Authorized reports,
+papers, presentations, and derivative works must cite the project as described in
+CITATION.cff unless the written permission states otherwise. Attribution does not
+grant a trademark license.
+
+5. Data and confidentiality
+This license grants no rights to any dataset, workspace, business information,
+trade secret, personal information, or third-party content processed or referenced
+by the Software. You are responsible for lawful data use, access control, backup,
+confidentiality, export control, and regulatory compliance.
+
+6. Trademarks
+SINOPEC, 中国石化, their names, logos, and all other third-party marks are the
+property of their respective owners. No trademark license or institutional
+endorsement is granted or implied. Unless separately authorized in writing by the
+relevant trademark owner, You must remove those marks from any copy, modification,
+or distribution permitted under a separate written agreement.
+
+7. Third-party materials
+Third-Party Materials are governed by their own licenses. Nothing in this license
+reduces rights granted by, or adds restrictions to, those licenses.
+
+8. No warranty; limitation of liability
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND. TO THE MAXIMUM
+EXTENT PERMITTED BY LAW, THE LICENSOR IS NOT LIABLE FOR ANY CLAIM, LOSS, DATA LOSS,
+BUSINESS INTERRUPTION, OR OTHER DAMAGES ARISING FROM THE SOFTWARE OR ITS USE.
+GeoInventory is not a substitute for professional geoscience, engineering,
+reserves, safety, legal, or regulatory judgment.
+
+9. Termination and reservation of rights
+Permission terminates automatically upon breach. You must then stop using and
+delete all copies, subject to applicable record-retention law. All rights not
+expressly granted are reserved. Any additional permission must be in writing from
+the lawful rights holder.
+
+10. Contact
+License and commercial-use requests: Zhu Sicheng, zhusc.syky@sinopec.com.
+
+中文条款
+
+1. 定义
+“本软件”指随本许可证发布的 GeoInventory 源代码、文档、用户界面、素材及其他资料，
+但不包括第三方材料。“许可方”指朱思成或依法享有相关权利的其他著作权人。“您”指访问
+本软件的任何个人或实体。
+
+2. 有限许可
+在遵守本条款的前提下，您可以通过获授权的 GitHub 仓库查看本软件，并可仅为个人、
+非生产、非商业评估运行一份未经修改的副本。除此之外不授予任何权利。
+
+3. 须事先取得书面许可的行为
+任何生产、单位内部、政府、教育服务、咨询、营利或其他商业用途，以及复制、修改、翻译、
+发表、分发、转授权、转售、向第三方托管或制作衍生作品，均须事先取得许可方书面许可。
+许可申请应说明拟使用者、用途、部署环境、期限和分发范围。
+
+4. 署名与声明
+经另行书面授权的任何使用，均须保留本许可证、版权声明、作者署名、引用元数据和全部法律
+声明。除非书面许可另有约定，经授权的报告、论文、演示和衍生成果须按 CITATION.cff 引用。
+署名不构成商标许可。
+
+5. 数据与保密
+本许可证不授予对本软件处理或引用的任何数据集、工区、业务信息、商业秘密、个人信息或
+第三方内容的权利。您应自行承担数据合法使用、访问控制、备份、保密、出口管制和合规责任。
+
+6. 商标
+SINOPEC、中国石化及其名称、图形和其他第三方标识的权利归各自权利人所有。本许可证不授予
+任何商标权，也不明示或暗示任何单位认可。除非相关商标权利人另行书面授权，在其他书面协议
+允许制作的任何副本、修改版或分发版本中，您必须移除上述标识。
+
+7. 第三方材料
+第三方材料适用其各自的许可证。本许可证不减少其许可证已经授予的权利，也不增加额外限制。
+
+8. 无担保与责任限制
+本软件按“现状”提供，不作任何形式的保证。在法律允许的最大范围内，许可方不对因本软件或
+其使用产生的索赔、损失、数据丢失、业务中断或其他损害承担责任。GeoInventory 不能替代专业
+地学、工程、储量、安全、法律或监管判断。
+
+9. 终止与权利保留
+违反条款时许可自动终止；除适用的档案保留法律另有要求外，您必须停止使用并删除全部副本。
+未明确授予的权利均予保留。任何附加许可均须由合法权利人书面作出。
+
+10. 联系方式
+许可与商业使用申请：朱思成，zhusc.syky@sinopec.com。
+

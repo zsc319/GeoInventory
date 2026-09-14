@@ -1,0 +1,14 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {"name": "示例有利区"},
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[499900,4209900],[500900,4209900],[500900,4210650],[499900,4210650],[499900,4209900]]]
+      }
+    }
+  ]
+}
+

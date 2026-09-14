@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: "If you use GeoInventory under an applicable written permission, please cite it as below. 经书面许可使用 GeoInventory 时，请按以下信息引用。"
+title: "GeoInventory (地数镜)"
+type: software
+authors:
+  - family-names: "Zhu"
+    given-names: "Sicheng"
+    alias: "朱思成"
+    email: "zhusc.syky@sinopec.com"
+version: "0.6.1"
+date-released: "2026-09-14"
+repository-code: "https://github.com/zsc319/GeoInventory"
+url: "https://github.com/zsc319/GeoInventory"
+license: "LicenseRef-GeoInventory-Source-Available-1.0"
