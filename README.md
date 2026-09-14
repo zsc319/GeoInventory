@@ -71,6 +71,8 @@ python .\本地化桌面端\tk_desktop.py
 
 The Tk client works with the Python standard library; PySide6 enables the advanced native client. Packaging scripts are available under `packaging/` and `本地化桌面端/packaging/`.
 
+To create the official Windows x64 portable archive, run `packaging\build_release.ps1`. The script builds into the ignored `.release_work/` directory and produces a ZIP plus `SHA256SUMS.txt`.
+
 ### Test
 
 ```powershell
@@ -117,3 +119,4 @@ This repository is **source-available, not open source**. Viewing and evaluation
 
 The SINOPEC/中国石化 names and logos are trademarks or registered trademarks of their respective owner(s). Their appearance identifies the author's stated affiliation and does not grant trademark rights or imply institutional endorsement. Remove the marks from redistributed or modified versions unless you have separate written authorization.
 
+Official builds embed the author, contact, copyright, license summary, trademark notice, and canonical repository in the UI and `/api/software-identity`. These notices deter misrepresentation but cannot make source code technically unmodifiable. Verify downloadable builds against the SHA-256 checksum published with each GitHub Release.

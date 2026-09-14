@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from geo_inventory import analytics
 from geo_inventory.db import Database
+from geo_inventory.identity import AUTHOR_EMAIL, AUTHOR_NAME, AUTHOR_NAME_ZH, COPYRIGHT, LICENSE_SUMMARY_ZH, TRADEMARK_NOTICE_ZH
 from geo_inventory.project_catalog import catalog_payload, parse_dev_stations, project_wells
 from geo_inventory.project_scan import load_snapshot
 
@@ -659,7 +660,7 @@ class MainWindow(QMainWindow):
                 button.setChecked(True)
             setattr(self, f"nav_{index}", button)
         nav_layout.addStretch(1)
-        permissions = QLabel("权限：科室内部测试\n制作：朱思成 · 海外重点项目中心")
+        permissions = QLabel(f"{AUTHOR_NAME}（{AUTHOR_NAME_ZH}）\n{AUTHOR_EMAIL}\n{COPYRIGHT}\n{LICENSE_SUMMARY_ZH}")
         permissions.setObjectName("permissions")
         permissions.setWordWrap(True)
         nav_layout.addWidget(permissions)
@@ -714,7 +715,9 @@ class MainWindow(QMainWindow):
         QMessageBox.information(self, "关于地数镜", "<b>地数镜 GeoInventory · 本地桌面版</b><br><br>"
                                 "不使用浏览器；所有窗口为原生 Qt 控件。<br>"
                                 "原始资料仅本地读取，分析结果保存在 `.nvt` 工区。<br><br>"
-                                "权限：现阶段 - 用于科室内部测试<br>制作：朱思成 - 海外重点项目中心")
+                                f"作者：{AUTHOR_NAME}（{AUTHOR_NAME_ZH}）<br>"
+                                f"邮箱：{AUTHOR_EMAIL}<br>{COPYRIGHT}<br>"
+                                f"{LICENSE_SUMMARY_ZH}<br>{TRADEMARK_NOTICE_ZH}")
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self.settings.setValue("windowSize", self.size())

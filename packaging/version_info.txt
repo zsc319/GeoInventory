@@ -18,6 +18,8 @@ VSVersionInfo(
          StringStruct('FileVersion', '0.6.1'),
          StringStruct('InternalName', 'GeoInventory'),
          StringStruct('LegalCopyright', 'Copyright (c) 2026 Zhu Sicheng. All rights reserved.'),
+         StringStruct('LegalTrademarks', 'SINOPEC and related marks belong to their respective owner(s).'),
+         StringStruct('Comments', 'Author: Zhu Sicheng (朱思成); zhusc.syky@sinopec.com; source-available, commercial use requires written permission.'),
          StringStruct('OriginalFilename', 'GeoInventory.exe'),
          StringStruct('ProductName', '地数镜 GeoInventory'),
          StringStruct('ProductVersion', '0.6.1')])

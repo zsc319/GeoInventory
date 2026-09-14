@@ -42,6 +42,7 @@ from geo_inventory import production_clustering as clustering_tools
 from geo_inventory import relationship_search as relationship_tools
 from geo_inventory import seismic_inventory as seismic_inventory_tools
 from geo_inventory.db import Database
+from geo_inventory.identity import public_identity
 
 # Some Windows installations register .js as text/plain.  Explicitly serving
 # front-end bundles as JavaScript avoids browser-specific strict MIME blocking.
@@ -1019,6 +1020,11 @@ def create_app(test_config: dict | None = None) -> Flask:
     @app.get("/favicon.ico")
     def favicon():
         return Response(status=204)
+
+    @app.get("/api/software-identity")
+    def api_software_identity():
+        """Build-embedded authorship, copyright, license, and trademark notice."""
+        return jsonify(public_identity(APP_VERSION))
 
     @app.get("/api/project")
     def api_project_snapshot():
@@ -4013,6 +4019,7 @@ def _open_local_browser() -> None:
 def _run_diagnostics() -> int:
     checks: dict[str, object] = {
         "app_version": APP_VERSION,
+        "software_identity": public_identity(APP_VERSION),
         "frozen": IS_FROZEN,
         "resource_dir": str(RESOURCE_DIR),
         "data_dir": str(DATA_DIR),

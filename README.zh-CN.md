@@ -71,6 +71,8 @@ python .\本地化桌面端\tk_desktop.py
 
 Tk 客户端仅依赖 Python 标准库；安装 PySide6 后可使用高级原生客户端。构建脚本位于 `packaging/` 与 `本地化桌面端/packaging/`。
 
+运行 `packaging\build_release.ps1` 可生成官方 Windows x64 便携包。脚本会在已被忽略的 `.release_work/` 目录内生成 ZIP 与 `SHA256SUMS.txt`。
+
 ### 测试
 
 ```powershell
@@ -117,3 +119,4 @@ Copyright © 2026 Zhu Sicheng。保留所有权利。
 
 SINOPEC/中国石化名称及图形属于其权利人所有的商标或注册商标。其出现仅用于说明作者所陈述的工作单位，不授予任何商标权，也不代表单位对本项目作出官方认可。未经商标权利人另行书面许可，修改版或再分发版本必须移除相关标识。
 
+官方构建会在界面、`/api/software-identity` 身份接口中固化作者、联系方式、版权、许可摘要、商标声明和规范仓库地址。这些信息可提高换壳成本并用于识别不当署名，但无法在技术上使公开源代码变成不可修改。下载发行包时，请使用 GitHub Release 同时公布的 SHA-256 校验值核对文件。

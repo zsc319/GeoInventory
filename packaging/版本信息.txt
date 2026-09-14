@@ -1,6 +1,6 @@
 地数镜 GeoInventory 0.6.1
 发布类型：Windows x64 便携版（科室内部测试）
-构建日期：2026-09-05
+构建日期：2026-09-14
 作者：Zhu Sicheng（朱思成）
 邮箱：zhusc.syky@sinopec.com
 版权：Copyright © 2026 Zhu Sicheng. All rights reserved.
@@ -12,8 +12,7 @@
 默认地址：http://127.0.0.1:5178/
 运行数据：%LOCALAPPDATA%\GeoInventory\data
 
-GeoInventory.exe SHA-256：
-9EF18A665A3AAB946C629EAEDBCB079907F162EAF5C4CBEA7164D815A02C59A2
+发行包 SHA-256：请以 GitHub Release 同时发布的 SHA256SUMS.txt 为准。
 
 说明：发行包未做商业代码签名。读取 OFM .mdb/.accdb 时，目标电脑需安装
 64 位 Microsoft Access Database Engine（ODBC 驱动）。

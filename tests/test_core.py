@@ -21,6 +21,16 @@ ROOT = Path(__file__).resolve().parents[1]
 SAMPLES = ROOT / "samples"
 
 
+def test_software_identity_is_embedded(tmp_path):
+    app = create_app({"TESTING": True, "DATABASE": str(tmp_path / "identity.sqlite")})
+    payload = app.test_client().get("/api/software-identity").get_json()
+    assert payload["author"] == "Zhu Sicheng"
+    assert payload["author_zh"] == "朱思成"
+    assert payload["email"] == "zhusc.syky@sinopec.com"
+    assert payload["repository"] == "https://github.com/zsc319/GeoInventory"
+    assert "SINOPEC" in payload["trademark"]
+
+
 def test_minimum_curvature_vertical_and_tvdss():
     rows = minimum_curvature([
         {"md": 0, "inclination": 0, "azimuth": 0},

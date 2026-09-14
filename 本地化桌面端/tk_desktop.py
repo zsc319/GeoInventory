@@ -22,6 +22,7 @@ PROJECT_ROOT = DESKTOP_ROOT.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from geo_inventory.db import Database
+from geo_inventory.identity import AUTHOR_EMAIL, AUTHOR_NAME, AUTHOR_NAME_ZH, COPYRIGHT, LICENSE_SUMMARY_ZH
 from geo_inventory.project_catalog import catalog_payload, parse_dev_stations, project_wells
 from geo_inventory.project_scan import load_snapshot
 
@@ -267,7 +268,7 @@ class DesktopApp(tk.Tk):
             button = ttk.Button(navigation, text=name, command=lambda value=name: self.show_page(value))
             button.pack(fill="x", pady=3)
         ttk.Button(navigation, text="打开 .nvt 工区", command=self.choose_workspace).pack(fill="x", side="bottom", pady=(10, 2))
-        ttk.Label(navigation, text="权限：科室内部测试\n制作：朱思成 · 海外重点项目中心", style="Muted.TLabel", background="#0c2018", justify="left").pack(fill="x", side="bottom", pady=8)
+        ttk.Label(navigation, text=f"{AUTHOR_NAME}（{AUTHOR_NAME_ZH}）\n{AUTHOR_EMAIL}\n{COPYRIGHT}\n{LICENSE_SUMMARY_ZH}", style="Muted.TLabel", background="#0c2018", justify="left", wraplength=190).pack(fill="x", side="bottom", pady=8)
         self.content = content
         self.build_dashboard()
         self.build_wells()
