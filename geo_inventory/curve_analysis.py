@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import re
 import sqlite3
@@ -107,11 +108,7 @@ def build_curve_profile(
     target: str | Path,
     progress_callback: Callable[[float, str], None] | None = None,
 ) -> dict[str, Any]:
-    project_root = str(Path(snapshot["project"]["root"]).resolve())
-    paths = [dict(row) for row in conn.execute(
-        """SELECT file_path,filename FROM project_catalog_items
-           WHERE project_root=? AND category_key='well_logs' ORDER BY filename""", (project_root,)
-    )]
+    paths = las_inventory_paths(conn, snapshot)
     wells, errors = [], []
     for index, item in enumerate(paths, 1):
         if progress_callback:
@@ -135,6 +132,7 @@ def build_curve_profile(
         "sample_wells": len(unique_wells),
         "las_files": len(wells),
         "catalog_las_count": len(paths),
+        "inventory_signature": las_inventory_signature(paths),
         "wells": wells,
         "errors": errors,
         "generated_at": utcnow(),
@@ -147,6 +145,56 @@ def build_curve_profile(
     if progress_callback:
         progress_callback(1.0, "全量 LAS 头段曲线索引已建立")
     return profile
+
+
+def las_inventory_paths(conn: sqlite3.Connection, snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return every LAS known either to the directory catalog or import DB."""
+    project_root = str(Path(snapshot["project"]["root"]).resolve())
+    candidates = [dict(row) for row in conn.execute(
+        """SELECT file_path,filename FROM project_catalog_items
+             WHERE project_root=? AND category_key='well_logs'
+           UNION ALL
+           SELECT file_path,filename FROM sources
+             WHERE status='ready' AND data_type='las'
+           ORDER BY filename""",
+        (project_root,),
+    )]
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in candidates:
+        path = Path(row["file_path"]).expanduser().resolve()
+        key = str(path).casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append({"file_path": str(path), "filename": row.get("filename") or path.name})
+    return result
+
+
+def las_inventory_signature(paths: list[dict[str, Any]]) -> str:
+    """Create a cheap freshness marker for the LAS-header cache."""
+    parts: list[str] = []
+    for row in paths:
+        path = Path(row["file_path"])
+        try:
+            stat = path.stat()
+            marker = f"{stat.st_size}:{stat.st_mtime_ns}"
+        except OSError:
+            marker = "missing"
+        parts.append(f"{str(path.resolve()).casefold()}:{marker}")
+    return hashlib.sha256("\n".join(sorted(parts)).encode("utf-8")).hexdigest()
+
+
+def curve_profile_is_current(
+    conn: sqlite3.Connection,
+    snapshot: dict[str, Any],
+    profile: dict[str, Any],
+) -> bool:
+    profile_scope = profile.get("scope") or profile.get("source")
+    if profile.get("schema_version") != 2 or profile_scope != "all_las_headers":
+        return False
+    paths = las_inventory_paths(conn, snapshot)
+    return bool(profile.get("inventory_signature")) and profile["inventory_signature"] == las_inventory_signature(paths)
 
 
 def load_curve_profile(snapshot: dict[str, Any], cache_path: str | Path | None = None) -> dict[str, Any]:

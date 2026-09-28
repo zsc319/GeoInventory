@@ -1,5 +1,19 @@
 # Changelog / 更新记录
 
+## 0.7.0 — 2026-09-28
+
+- Added workspace path relocation with preview, source-file checks, and transactional updates for drive or folder moves.
+- Added seismic section preview, surface quality checks and comparisons, and time-depth and LAS export tools.
+- Expanded volumetric reserve analysis, production correction, and production clustering workflows.
+- Kept seismic inversion outside this release; the seismic section is a viewing tool only.
+- Validated the source with 77 automated tests and exercised relocation on a temporary copy of a real workspace.
+
+- 新增工区路径更改：预览盘符或目录迁移，抽查资料，并批量更新工区内部引用。
+- 新增地震剖面预览、表面质量检查与对比，以及时深和 LAS 导出工具。
+- 扩展储量参数分析、生产动态校正和生产聚类流程。
+- 地震剖面当前只供显示；本版尚未提供地震反演处理。
+- 通过 77 项自动化测试，并在真实工区临时副本上验证路径迁移。
+
 ## 0.6.1 — 2026-09-14
 
 First public source-available evaluation release / 首次公开的源代码可见评估版本。

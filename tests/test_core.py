@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+import json
 import struct
+import time
 from pathlib import Path
 
 import pytest
 
 from app import create_app
+from geo_inventory import production_clustering as clustering_module
 from geo_inventory.db import Database
 from geo_inventory.geometry import point_in_polygon, polygon_area
 from geo_inventory.curve_analysis import is_time_depth_mnemonic
 from geo_inventory.importers import ImportService, parse_las, parse_las_curve_samples, parse_las_header, scan_segy
-from geo_inventory.project_scan import parse_petrel_surface, parse_petrel_well_head
+from geo_inventory.project_scan import parse_petrel_surface, parse_petrel_well_head, save_snapshot
 from geo_inventory.production_clustering import build_feature_dataset
+from geo_inventory.production_correction import build_audit, rebuild_monthly
 from geo_inventory.seismic_inventory import build_inventory, canonical_volume_name, quick_file_metadata
 from geo_inventory.trajectory import minimum_curvature
 from geo_inventory.well_identity import classify_well_identity
@@ -40,6 +44,64 @@ def test_minimum_curvature_vertical_and_tvdss():
     assert rows[-1]["northing"] == pytest.approx(0)
     assert rows[-1]["tvdss"] == pytest.approx(900)
     assert rows[-1]["z_msl"] == pytest.approx(-900)
+
+
+def test_production_correction_rebuilds_ebano_style_missing_cumulative():
+    rows = [
+        {"id": 1, "source_id": 7, "well_key": "EBANO2", "well_name": "Ebano-2", "production_month": "1927-04-01T00:00:00", "days_on": None, "oil_rate": 269.01371, "monthly_oil": None, "cumulative_oil": None, "metadata_json": '{"raw":{"GAS":538.02742}}'},
+        {"id": 2, "source_id": 7, "well_key": "EBANO2", "well_name": "Ebano-2", "production_month": "1927-05-01T00:00:00", "days_on": None, "oil_rate": 5646.74173, "monthly_oil": None, "cumulative_oil": 0, "metadata_json": '{"raw":{"GAS":11293.48346}}'},
+        {"id": 3, "source_id": 7, "well_key": "EBANO2", "well_name": "Ebano-2", "production_month": "1927-06-01T00:00:00", "days_on": None, "oil_rate": 4585.76811, "monthly_oil": None, "cumulative_oil": 0, "metadata_json": '{"raw":{"GAS":9171.53622}}'},
+    ]
+
+    corrected, summary = rebuild_monthly(rows)
+
+    assert [row["days_on"] for row in corrected] == [30, 31, 30]
+    assert corrected[-1]["cumulative_oil"] == pytest.approx(269.01371 * 30 + 5646.74173 * 31 + 4585.76811 * 30)
+    assert corrected[0]["gas_rate"] == pytest.approx(538.02742)
+    assert summary["inferred_days_count"] == 3
+    audit = build_audit(rows, corrected, [], [], [])
+    by_field = {row["field_key"]: row for row in audit}
+    assert by_field["cumulative_oil"]["changed"] == 1
+    assert by_field["uptime_ratio"]["changed"] == 1
+    assert by_field["initial_gor"]["corrected_value"] == pytest.approx(2.0)
+
+
+def test_production_overview_and_clustering_mount_latest_completed_correction(tmp_path):
+    db_path = tmp_path / "correction.sqlite"
+    corrected_mdb = tmp_path / "生产动态_校正.mdb"
+    corrected_mdb.touch()
+    database = Database(db_path)
+    with database.connect() as conn:
+        source_id = conn.execute(
+            "INSERT INTO sources(filename,file_path,data_type,imported_at,status) VALUES(?,?,?,?,?)",
+            ("original.mdb", str(tmp_path / "original.mdb"), "production", "2026-01-01T00:00:00", "ready"),
+        ).lastrowid
+        run_id = conn.execute(
+            """INSERT INTO production_correction_runs(source_id,source_path,corrected_mdb_path,created_at,completed_at,status,well_count,record_count,corrected_well_count,corrected_value_count,inferred_days_count)
+               VALUES(?,?,?,?,?,'complete',1,1,1,2,1)""",
+            (source_id, str(tmp_path / "original.mdb"), str(corrected_mdb), "2026-01-01T00:00:00", "2026-01-01T00:01:00"),
+        ).lastrowid
+        conn.execute(
+            """INSERT INTO production_corrected_monthly(run_id,source_id,well_key,well_name,production_month,days_on,oil_rate,monthly_oil,cumulative_oil,metadata_json)
+               VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            (run_id, source_id, "EBANO2", "Ebano-2", "1927-04-01T00:00:00", 30, 269.01371, 8070.4113, 8070.4113, "{}"),
+        )
+
+    client = create_app({"TESTING": True, "DATABASE": str(db_path)}).test_client()
+    overview = client.get("/api/production").get_json()
+
+    assert overview["production_source"]["mode"] == "corrected"
+    assert overview["well_summaries"][0]["cumulative_oil"] == pytest.approx(8070.4113)
+    clustering = client.get("/api/production-clustering").get_json()
+    assert clustering["data_source"]["mode"] == "corrected"
+    assert clustering["data_source"]["selected"] is True
+    assert clustering["data_source"]["verified"] is True
+    assert clustering["data_source"]["filename"] == "生产动态_校正.mdb"
+    assert clustering["data_source"]["path"] == str(corrected_mdb)
+    assert clustering["data_source"]["run_id"] == run_id
+    assert clustering["data_source"]["record_count"] == 1
+    assert clustering["data_source"]["scope"] == "01 数据体检至 09 二维展示"
+    assert clustering["wells"][0]["values"]["cumulative_oil"] == pytest.approx(8.0704113)
 
 
 def test_polygon_boundary_is_inside():
@@ -134,6 +196,12 @@ def test_ofm_monthly_production_import_and_summary(tmp_path):
     assert summary["initial_water_cut"] == 25
     assert summary["cumulative_oil"] == 2300
     assert summary["cumulative_water"] == 975
+    assert summary["cumulative_liquid_kbbl"] == pytest.approx(3.275)
+    assert summary["production_days"] == 30
+    assert summary["average_oil_rate"] == pytest.approx(2300 / 30)
+    assert summary["average_water_rate"] == pytest.approx(975 / 30)
+    assert summary["average_liquid_rate"] == pytest.approx(3275 / 30)
+    assert summary["latest_liquid_rate"] == 80
     assert summary["pressure_change"] == pytest.approx(-3.5)
     assert summary["hard_evidence"] is True
 
@@ -189,8 +257,13 @@ def test_production_clustering_inventory_training_and_grades(tmp_path):
     assert inventory_response.status_code == 200
     inventory = inventory_response.get_json()
     assert inventory["readiness"]["well_count"] == 4
+    assert inventory["performance"]["feature_cache"] == "rebuilt"
+    cached_inventory = client.get("/api/production-clustering").get_json()
+    assert cached_inventory["performance"]["feature_cache"] == "hit"
     assert inventory["readiness"]["training_candidates"] == 4
     assert any(row["key"] == "initial_gor" and not row["available"] for row in inventory["indicators"])
+    assert [row["key"] for row in inventory["composition_schemes"]] == ["initial_3m_rate", "late_3m_rate", "cumulative"]
+    assert inventory["wells"][0]["values"]["initial_3m_water_rate"] is not None
     well_keys = [row["well_key"] for row in inventory["wells"]]
     selected = [row["key"] for row in inventory["indicators"] if row["selected"]]
 
@@ -223,14 +296,125 @@ def test_production_clustering_inventory_training_and_grades(tmp_path):
     assert som["model_type"] == "som"
     assert "SOM" in som["model"]
     assert len(som["loss_history"]) == 20
+    assert som["performance"]["engine"] in {"NumPy 向量化计算", "Python 兼容计算"}
+    assert som["performance"]["feature_cache"] == "hit"
+
+    background = client.post("/api/production-clustering/training-jobs", json={
+        "model": "kmeans", "cluster_count": 2, "max_iterations": 10,
+        "indicators": selected, "training_wells": well_keys, "evaluation_wells": well_keys,
+    })
+    assert background.status_code == 202
+    job = background.get_json()
+    for _ in range(100):
+        job = client.get(f"/api/production-clustering/training-jobs/{job['id']}").get_json()
+        if job["status"] in {"complete", "failed"}:
+            break
+        time.sleep(0.02)
+    assert job["status"] == "complete"
+    assert job["percent"] == 100
+    assert job["result"]["ready"] is True
 
     save_response = client.post("/api/production-clustering/save", json={
-        "plan_name": "测试方案", "configuration": {"model": "som"}, "result": som,
+        "plan_id": "plan-test", "plan_name": "测试方案",
+        "configuration": {
+            "model": "som",
+            "plan_state": {
+                "training_wells": well_keys, "evaluation_wells": well_keys,
+                "indicators": selected, "model": "som", "segmentation": "split",
+                "modelSettings": {"som": {"cluster_count": 2}},
+                "architectures": {"som": [{"type": "som", "nodes": 2}]},
+            },
+        },
+        "result": som,
     })
     assert save_response.status_code == 200
     saved = save_response.get_json()
     assert saved["saved"] is True
-    assert set(saved["files"]) == {"井产能分类结果.csv", "类别指标统计.csv", "训练摘要.json", "训练配置.json"}
+    assert set(saved["files"]) == {"井产能分类结果.csv", "类别指标统计.csv", "训练摘要.json", "训练配置.json", "完整训练结果.json"}
+    assert saved["plan"]["id"] == "plan-test"
+
+    group_response = client.post("/api/production-clustering/well-groups", json={
+        "id": "group-test", "name": "测试独立井组",
+        "well_keys": [well_keys[0], well_keys[1], well_keys[0]],
+    })
+    assert group_response.status_code == 200
+    assert group_response.get_json()["group"]["well_keys"] == well_keys[:2]
+    rename_response = client.patch("/api/production-clustering/well-groups/group-test", json={
+        "name": "重命名后的独立井组",
+    })
+    assert rename_response.status_code == 200
+    assert rename_response.get_json()["group"]["name"] == "重命名后的独立井组"
+    assert rename_response.get_json()["group"]["well_keys"] == well_keys[:2]
+
+    # A fresh app instance represents closing and reopening the same .nvt.
+    reopened = create_app({"TESTING": True, "DATABASE": str(db_path)}).test_client()
+    restored = reopened.get("/api/production-clustering/state").get_json()
+    assert restored["active_plan_id"] == "plan-test"
+    assert len(restored["plans"]) == 1
+    assert restored["plans"][0]["name"] == "测试方案"
+    assert restored["plans"][0]["configuration"]["plan_state"]["model"] == "som"
+    assert restored["plans"][0]["result"]["ready"] is True
+    compact = reopened.get("/api/production-clustering/state?compact=1").get_json()
+    assert compact["plans"][0]["has_result"] is True
+    assert compact["plans"][0]["result"] == {}
+    assert compact["plans"][0]["result_deferred"] is True
+    assert compact["plans"][0]["result_summary"]["cluster_count"] == 2
+    detail = reopened.get("/api/production-clustering/state/plans/plan-test").get_json()
+    assert detail["plan"]["result"]["ready"] is True
+    assert detail["plan"]["configuration"]["plan_state"]["model"] == "som"
+    assert restored["well_groups"] == [{
+        "id": "group-test", "name": "重命名后的独立井组", "well_keys": well_keys[:2],
+        "created_at": restored["well_groups"][0]["created_at"],
+        "updated_at": restored["well_groups"][0]["updated_at"],
+    }]
+    listed_groups = reopened.get("/api/production-clustering/well-groups").get_json()["well_groups"]
+    assert listed_groups[0]["id"] == "group-test"
+    assert listed_groups[0]["well_keys"] == well_keys[:2]
+
+
+def test_production_clustering_indexes_legacy_saved_scheme(tmp_path):
+    db_path = tmp_path / "inventory.sqlite"
+    scheme = tmp_path / "生产聚类" / "旧方案"
+    scheme.mkdir(parents=True)
+    (scheme / "训练配置.json").write_text(json.dumps({
+        "plan_name": "旧方案", "saved_at": "2026-09-15T08:48:06+08:00",
+        "model": "som", "cluster_count": 2,
+        "indicators": ["initial_3m_oil_rate"],
+        "training_wells": ["WELL1"], "evaluation_wells": ["WELL1"],
+    }, ensure_ascii=False), encoding="utf-8")
+    (scheme / "训练摘要.json").write_text(json.dumps({
+        "model": "SOM", "model_type": "som", "selected_indicators": ["initial_3m_oil_rate"],
+        "cluster_count": 2, "training_count": 1, "training_sample_count": 1,
+        "evaluation_count": 1, "silhouette": 0.5,
+        "category_order": [
+            {"category": "产能类型 1", "cluster": 1, "rank": 1, "level": "相对较好"},
+            {"category": "产能类型 2", "cluster": 0, "rank": 2, "level": "相对偏弱"},
+        ],
+    }, ensure_ascii=False), encoding="utf-8")
+    (scheme / "井产能分类结果.csv").write_text(
+        "井名,范围,产能类别,相对级次,开发层位,X,Y,initial_3m_oil_rate\n"
+        "Well-1,训练井,产能类型 1,1,KAN,100,200,88.5\n",
+        encoding="utf-8-sig",
+    )
+    (scheme / "类别指标统计.csv").write_text(
+        "类别,相对级次,样本数,指标,单位,最小值,Q1,中值,Q3,最大值\n"
+        "产能类型 1,1,1,初期3个月平均日产油,bbl/d,88.5,88.5,88.5,88.5,88.5\n",
+        encoding="utf-8-sig",
+    )
+
+    client = create_app({"TESTING": True, "DATABASE": str(db_path)}).test_client()
+    first = client.get("/api/production-clustering/state").get_json()
+    assert first["migrated_plan_count"] == 1
+    assert first["active_plan_id"] == "legacy-001"
+    assert first["plans"][0]["name"] == "旧方案"
+    assert first["plans"][0]["result"]["ready"] is True
+    assert first["plans"][0]["result"]["results"][0]["well_key"] == "WELL1"
+    assert first["plans"][0]["result"]["results"][0]["metrics"][0]["value"] == 88.5
+
+    # The folder is indexed once; later module opens read the database record.
+    second = client.get("/api/production-clustering/state").get_json()
+    assert second["migrated_plan_count"] == 0
+    assert len(second["plans"]) == 1
 
 
 def test_production_clustering_builds_auditable_pre_post_samples():
@@ -255,6 +439,53 @@ def test_production_clustering_builds_auditable_pre_post_samples():
     assert [row["segment"] for row in well["segment_samples"]] == ["措施前基线", "措施后响应"]
     assert all(row["record_count"] == 4 for row in well["segment_samples"])
     assert well["segment_samples"][1]["values"]["initial_3m_oil_rate"] == 90
+    assert well["segment_samples"][1]["values"]["initial_3m_water_rate"] == 20
+
+
+def test_production_composition_uses_additive_windows_and_gas_equivalent():
+    monthly = []
+    cumulative_oil = cumulative_water = cumulative_gas = 0
+    for month, gas_rate in enumerate((6000, 12000, 18000), 1):
+        cumulative_oil += 100 * 30
+        cumulative_water += 50 * 30
+        cumulative_gas += gas_rate * 30
+        monthly.append({
+            "id": month, "well_key": "P1", "well_name": "P-1",
+            "production_month": f"2026-{month:02d}", "days_on": 30,
+            "oil_rate": 100, "water_rate": 50, "gas_rate": gas_rate,
+            "monthly_oil": 3000, "monthly_water": 1500, "monthly_gas": gas_rate * 30,
+            "cumulative_oil": cumulative_oil, "cumulative_water": cumulative_water,
+            "cumulative_gas": cumulative_gas,
+        })
+    dataset = build_feature_dataset(monthly, [], [], [{"well_key": "P1", "well_name": "P-1"}])
+    values = dataset["wells"][0]["values"]
+    assert values["initial_3m_oil_rate"] == 100
+    assert values["initial_3m_water_rate"] == 50
+    assert values["initial_3m_gas_boe_rate"] == pytest.approx(2)
+    assert values["cumulative_oil"] == pytest.approx(9)
+    assert values["cumulative_water"] == pytest.approx(4.5)
+    assert values["cumulative_gas_kboe"] == pytest.approx(0.18)
+    component_keys = {
+        component["metric_key"]
+        for scheme in dataset["composition_schemes"]
+        for component in scheme["components"]
+    }
+    assert "late_water_cut" not in component_keys
+    assert "water_cut_growth" not in component_keys
+    assert "oil_decline_pct" not in component_keys
+
+
+def test_vectorized_som_preserves_online_update_results(monkeypatch):
+    if clustering_module.np is None:
+        pytest.skip("NumPy acceleration is unavailable")
+    matrix = [[-1.2, 0.3, 0.8], [-0.7, 0.1, 0.5], [0.4, -0.2, -0.1], [1.1, -0.5, -0.8]]
+    accelerated = clustering_module._som(matrix, 2, 12, 0.4, 1.2, "line")
+    monkeypatch.setattr(clustering_module, "np", None)
+    fallback = clustering_module._som(matrix, 2, 12, 0.4, 1.2, "line")
+    assert accelerated[0] == fallback[0]
+    for accelerated_row, fallback_row in zip(accelerated[1], fallback[1]):
+        assert accelerated_row == pytest.approx(fallback_row, abs=1e-12)
+    assert accelerated[2] == fallback[2]
 
 
 def test_production_clustering_preflight_points_to_missing_dataset_step(tmp_path):
@@ -292,6 +523,64 @@ def test_end_to_end_import_and_api(tmp_path):
     trajectory = client.get(f"/api/wells/{wells[0]['id']}/trajectory").get_json()
     assert trajectory
     assert trajectory[-1]["tvdss"] is not None
+
+
+def test_minimal_well_head_excel_enters_catalog_and_clustering_map(tmp_path):
+    from openpyxl import Workbook
+
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    (project_root / "README.txt").write_text("project", encoding="utf-8")
+    excel_path = tmp_path / "new-delivery" / "well-heads.xlsx"
+    excel_path.parent.mkdir()
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["Index", "Well Name", "surface X", "surface Y", "base X", "base Y"])
+    sheet.append([1, "EB-2035DES", 574057, 2470705, 573930.56, 2470727])
+    sheet.append([2, "EB-2079DES", 574667, 2471541, 574411.36, 2471563])
+    workbook.save(excel_path)
+
+    snapshot_path = tmp_path / "project_snapshot.json"
+    save_snapshot({
+        "project": {"root": str(project_root), "total_files": 1, "scanned_at": "2026-09-17T00:00:00Z"},
+        "representatives": [],
+        "wellheads": {"wells": [], "crs": "EPSG:32614"},
+        "representative_analysis": {"las_samples": [], "dev_samples": []},
+    }, snapshot_path)
+    db_path = tmp_path / "well-head-excel.sqlite"
+    client = create_app({
+        "TESTING": True,
+        "DATABASE": str(db_path),
+        "PROJECT_SNAPSHOT": str(snapshot_path),
+    }).test_client()
+    imported = client.post("/api/import-path", json={
+        "paths": [str(excel_path)], "data_type": "auto", "crs": "EPSG:32614",
+    })
+    assert imported.status_code == 200
+    assert imported.get_json()["results"][0]["data_type"] == "well_head"
+    assert imported.get_json()["results"][0]["records"] == 2
+
+    database = Database(db_path)
+    with database.connect() as conn:
+        wells = [dict(row) for row in conn.execute("SELECT canonical_name,x,y,crs FROM wells ORDER BY canonical_name")]
+        source = conn.execute("SELECT attributes_json FROM well_sources ORDER BY id LIMIT 1").fetchone()
+    assert wells == [
+        {"canonical_name": "EB-2035DES", "x": 574057.0, "y": 2470705.0, "crs": "EPSG:32614"},
+        {"canonical_name": "EB-2079DES", "x": 574667.0, "y": 2471541.0, "crs": "EPSG:32614"},
+    ]
+    assert json.loads(source["attributes_json"])["base X"] == 573930.56
+    catalog = client.get("/api/catalog?category=well_heads").get_json()
+    assert catalog["total"] == 1
+    assert catalog["items"][0]["filename"] == "well-heads.xlsx"
+
+    clustering = client.get("/api/production-clustering").get_json()
+    assert clustering["wells"] == []
+    assert clustering["readiness"]["map_well_count"] == 2
+    assert clustering["readiness"]["coordinate_wells"] == 2
+    assert {(row["well_name"], row["x"], row["y"], row["has_production"]) for row in clustering["map_wells"]} == {
+        ("EB-2035DES", 574057.0, 2470705.0, False),
+        ("EB-2079DES", 574667.0, 2471541.0, False),
+    }
 
 
 def make_segy(path: Path) -> None:

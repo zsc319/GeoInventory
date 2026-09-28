@@ -4,15 +4,18 @@
 
 **Local-first geological data inventory, quality-control, and spatial-association software.** GeoInventory helps teams understand legacy subsurface data before interpretation: what exists, where it came from, how complete it is, and how wells, logs, horizons, seismic, polygons, and production records relate.
 
-> Status: v0.6.1, pre-release / internal evaluation. The software is not a certified interpretation, reserves, safety, or regulatory decision system.
+> Status: v0.7.0, pre-release / internal evaluation. The software is not a certified interpretation, reserves, safety, or regulatory decision system.
 
 ## Highlights
 
 - Local-first operation: source files remain in place; a `.nvt` workspace stores indexes, analysis state, and user decisions.
+- If a drive letter or source directory changes, use Workspace → Change paths to preview and update stored references after checking the new source directory; source files are not moved.
 - Unified well identity with explicit evidence, aliases, ambiguity candidates, and traceability to original files.
 - Inventory and QC for Well Head, LAS, DEV, Well Top, core, interpretation tables, SEG-Y, horizons, faults, polygons, and production data.
 - Lazy parsing for large datasets: SEG-Y amplitudes and complete LAS samples are not read during the initial inventory scan.
 - Well–horizon–curve–spatial association, coverage matrices, curve comparison, trajectory calculations, and export manifests.
+- Read-only surface quality checks, nearest-node values at wells, and multi-surface correlation and PCA previews.
+- On-demand 2D and 3D inline/crossline section previews for fixed-length SEG-Y files, with display gain and palette controls.
 - A browser-based local interface plus an experimental native Windows desktop client.
 
 ## Supported inputs
@@ -23,7 +26,7 @@
 | Well logs | Common LAS 2.0 files |
 | Trajectories | CSV, TSV, XLSX and common DEV text exports |
 | Interpretation / core | Tabular interpretation data and image-based core collections |
-| Seismic | SEG-Y headers and geometry metadata |
+| Seismic | SEG-Y headers and geometry metadata; on-demand fixed-length SEG-Y section previews |
 | Surfaces / spatial | GeoJSON, SHP polygons or closed PolyLineZ, XYZ/ZMAP+, and selected Petrel-style surface exports |
 | Production | CSV/XLSX exports and read-only OFM `.mdb`/`.accdb` access when a compatible ODBC driver is installed |
 
@@ -109,7 +112,7 @@ If you refer to this project in an approved report, paper, presentation, or deri
 
 Suggested citation:
 
-> Zhu, Sicheng. (2026). *GeoInventory (地数镜), version 0.6.1*. https://github.com/zsc319/GeoInventory
+> Zhu, Sicheng. (2026). *GeoInventory (地数镜), version 0.7.0*. https://github.com/zsc319/GeoInventory
 
 ## License and commercial use
 

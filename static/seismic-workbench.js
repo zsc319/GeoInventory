@@ -55,6 +55,7 @@
       <details class="seismic-header-preview" ${path.text_header_preview?'':'hidden'}><summary>查看 SEG-Y 文本头摘要</summary><pre>${esc(path.text_header_preview||'')}</pre></details>`;
     detail.querySelectorAll('[data-seismic-path]').forEach(button=>button.onclick=()=>{ss.selectedPath=group.paths.find(row=>row.path===button.dataset.seismicPath);renderDetail()});
     detail.querySelector('#analyze-seismic-path').onclick=analyzeSelected;
+    window.seismicSectionSelectionChanged?.(path);
   }
 
   async function analyzeSelected(){
@@ -74,11 +75,12 @@
 
   window.loadSeismicWorkbench=async function(force=false){
     bind();const ss=seismicState();if(!ss.data||force){
+      if(force)window.seismicSectionSelectionChanged?.(null);
       const button=document.querySelector('#refresh-seismic-inventory');button.disabled=true;button.textContent='正在检索…';
       document.querySelector('#seismic-volume-list').innerHTML='<div class="empty-state">正在读取地震文件头；不会读取振幅样点…</div>';
       try{
         ss.data=await api('/api/seismic-inventory');state.seismic=ss.data.groups;ss.selectedGroup=null;ss.selectedPath=null;const attribute=document.querySelector('#seismic-attribute-filter'),current=attribute.value,types=[...new Set(ss.data.groups.flatMap(group=>group.attribute_types))].sort((a,b)=>a.localeCompare(b,'zh-CN'));attribute.innerHTML='<option value="">全部属性</option>'+types.map(value=>`<option value="${esc(value)}">${esc(value)}</option>`).join('');if(types.includes(current))attribute.value=current;renderMetrics(ss.data);renderGroups();
-        const first=filteredGroups()[0];if(first)selectGroup(first.key);else document.querySelector('#seismic-detail').innerHTML='<div class="seismic-detail-empty"><i>≋</i><b>没有可展示的地震文件</b><span>当前项目目录尚未发现 SEG-Y 或 ZGY。</span></div>';
+        const first=filteredGroups()[0];if(first)selectGroup(first.key);else {document.querySelector('#seismic-detail').innerHTML='<div class="seismic-detail-empty"><i>≋</i><b>没有可展示的地震文件</b><span>当前项目目录尚未发现 SEG-Y 或 ZGY。</span></div>';window.seismicSectionSelectionChanged?.(null)}
       }finally{button.disabled=false;button.textContent='↻ 重新检索目录'}
     }else{renderMetrics(ss.data);renderGroups();if(ss.selectedGroup)renderDetail()}
   };

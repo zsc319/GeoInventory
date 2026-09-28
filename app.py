@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import atexit
+import ctypes
 import io
 import json
 import math
@@ -22,6 +23,7 @@ from datetime import datetime
 from importlib.metadata import version as package_version
 from pathlib import Path
 from contextlib import nullcontext
+from typing import Any
 
 from flask import Flask, Response, jsonify, render_template, request, send_file
 from werkzeug.utils import secure_filename
@@ -35,12 +37,19 @@ from geo_inventory import global_filter as filter_tools
 from geo_inventory import horizon_analysis as horizon_tools
 from geo_inventory import interpretation_core as interpretation_tools
 from geo_inventory import inventory_insights as insight_tools
+from geo_inventory import las_export as las_export_tools
 from geo_inventory import model_inventory as model_tools
 from geo_inventory import ofm_mdb as ofm_tools
 from geo_inventory import production as production_tools
+from geo_inventory import production_correction as correction_tools
 from geo_inventory import production_clustering as clustering_tools
+from geo_inventory import reserves as reserve_tools
+from geo_inventory import surface_qc as surface_qc_tools
+from geo_inventory.production_training import ProductionTrainingManager
 from geo_inventory import relationship_search as relationship_tools
 from geo_inventory import seismic_inventory as seismic_inventory_tools
+from geo_inventory import seismic_section as seismic_section_tools
+from geo_inventory import time_depth as time_depth_tools
 from geo_inventory.db import Database
 from geo_inventory.identity import public_identity
 
@@ -67,6 +76,7 @@ from geo_inventory.project_catalog import (
     parse_dev_stations,
     save_well_alias,
     replace_well_group_members,
+    sync_imported_sources_to_catalog,
     sync_project_catalog,
     unassign_items_from_group,
     update_catalog_group,
@@ -74,6 +84,7 @@ from geo_inventory.project_catalog import (
 )
 from geo_inventory.project_scan import build_project_snapshot, load_snapshot, save_snapshot
 from geo_inventory.workspace import APP_VERSION, WORKSPACE_FORMAT_VERSION, WorkspaceManager
+from geo_inventory.path_relocation import relocate_paths
 
 
 IS_FROZEN = bool(getattr(sys, "frozen", False))
@@ -85,6 +96,37 @@ else:
     default_data_dir = RESOURCE_DIR / "data"
 DATA_DIR = Path(os.environ.get("GEOINVENTORY_DATA_DIR") or default_data_dir).expanduser().resolve()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def reveal_in_windows_explorer(target: Path, mode: str = "select") -> dict[str, Any]:
+    """Route reveal requests through the interactive Windows desktop shell."""
+    if os.name != "nt":
+        raise OSError("当前系统不支持 Windows 资源管理器定位")
+    target = target.resolve()
+    folder = target if target.is_dir() else target.parent
+    shell_execute = ctypes.windll.shell32.ShellExecuteW
+    shell_execute.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_int]
+    shell_execute.restype = ctypes.c_void_p
+    selected = False
+    if mode == "folder":
+        # Open the directory object through its registered shell handler. The
+        # legacy "explore" verb returns access denied on some Windows builds.
+        result = shell_execute(None, "open", str(folder), None, None, 1)
+    else:
+        result = shell_execute(None, "open", "explorer.exe", f'/select,"{target}"', str(folder), 1)
+        selected = int(result or 0) > 32
+        if not selected:
+            # Selection can be blocked by Explorer's single-instance policy;
+            # opening the containing folder is still a useful, honest fallback.
+            result = shell_execute(None, "open", str(folder), None, None, 1)
+    status = int(result or 0)
+    if status <= 32:
+        messages = {
+            2: "指定文件不存在", 3: "指定目录不存在", 5: "系统拒绝访问",
+            8: "系统内存不足", 31: "文件关联不可用", 32: "动态链接库不可用",
+        }
+        raise OSError(messages.get(status, f"Windows Shell 返回错误码 {status}"))
+    return {"launcher": "Windows Shell", "shell_status": status, "folder": str(folder), "selected": selected}
 SERVER_HOST = "127.0.0.1"
 try:
     SERVER_PORT = int(os.environ.get("GEOINVENTORY_PORT", "5178"))
@@ -405,31 +447,42 @@ def _ofm_deviation_dev_zip(conn: sqlite3.Connection) -> tuple[bytes, int]:
     return stream.getvalue(), sum(1 for row in manifest if row["status"] == "已导出")
 
 
-def _production_dashboard_summaries(conn: sqlite3.Connection, events: list[dict]) -> list[dict]:
+def _production_dashboard_summaries(conn: sqlite3.Connection, events: list[dict], correction_run_id: int | None = None) -> list[dict]:
     """Summarize a large OFM history in SQLite instead of transferring every row to Python.
 
     The production page only needs per-well metrics.  Full monthly records are
     fetched on demand for the selected well, which keeps a 200k+ row MDB
     responsive while retaining the same calculation contract as exports.
     """
+    table = "production_corrected_monthly" if correction_run_id else "production_monthly"
+    where = " WHERE run_id=?" if correction_run_id else ""
+    params = (correction_run_id,) if correction_run_id else ()
+    gas_rate_column = "gas_rate" if correction_run_id else "NULL"
+    monthly_gas_column = "monthly_gas" if correction_run_id else "NULL"
+    cumulative_gas_column = "cumulative_gas" if correction_run_id else "NULL"
     aggregate_rows = [dict(row) for row in conn.execute(
-        """SELECT well_key, MIN(well_name) well_name,
+        f"""SELECT well_key, MIN(well_name) well_name,
                   COUNT(DISTINCT NULLIF(production_month,'')) production_months,
-                  SUM(monthly_oil) cumulative_oil, SUM(monthly_water) cumulative_water
-           FROM production_monthly GROUP BY well_key"""
+                  SUM(CASE WHEN days_on>0 THEN days_on ELSE 0 END) production_days,
+                  SUM(COALESCE(monthly_oil,CASE WHEN oil_rate IS NOT NULL AND days_on>0 THEN oil_rate*days_on END)) cumulative_oil,
+                  SUM(COALESCE(monthly_water,CASE WHEN water_rate IS NOT NULL AND days_on>0 THEN water_rate*days_on END)) cumulative_water,
+                  SUM(COALESCE({monthly_gas_column},CASE WHEN {gas_rate_column} IS NOT NULL AND days_on>0 THEN {gas_rate_column}*days_on END)) cumulative_gas,
+                  AVG(oil_rate) mean_oil_rate,AVG(water_rate) mean_water_rate,
+                  AVG(liquid_rate) mean_liquid_rate,AVG({gas_rate_column}) mean_gas_rate
+           FROM {table}{where} GROUP BY well_key""", params
     )]
     initial_rows = [dict(row) for row in conn.execute(
-        """SELECT well_key,well_name,production_month,liquid_rate,oil_rate,water_rate,water_cut
+        f"""SELECT well_key,well_name,production_month,liquid_rate,oil_rate,water_rate,water_cut
            FROM (
              SELECT well_key,well_name,production_month,liquid_rate,oil_rate,water_rate,water_cut,id,
                     ROW_NUMBER() OVER(PARTITION BY well_key ORDER BY production_month,id) ordinal
-             FROM production_monthly
-             WHERE liquid_rate IS NOT NULL OR oil_rate IS NOT NULL OR water_rate IS NOT NULL
-                OR monthly_oil IS NOT NULL OR monthly_water IS NOT NULL
-           ) WHERE ordinal=1"""
+             FROM {table}
+             WHERE {'run_id=? AND (' if correction_run_id else '('}liquid_rate IS NOT NULL OR oil_rate IS NOT NULL OR water_rate IS NOT NULL
+                OR monthly_oil IS NOT NULL OR monthly_water IS NOT NULL)
+           ) WHERE ordinal=1""", params
     )]
     pressure_rows = [dict(row) for row in conn.execute(
-        """SELECT well_key,
+        f"""SELECT well_key,
                   MAX(CASE WHEN first_rank=1 THEN pressure END) pressure_first,
                   MAX(CASE WHEN last_rank=1 THEN pressure END) pressure_latest,
                   MIN(pressure) pressure_min, MAX(pressure) pressure_max
@@ -437,31 +490,44 @@ def _production_dashboard_summaries(conn: sqlite3.Connection, events: list[dict]
              SELECT well_key,pressure,production_month,id,
                     ROW_NUMBER() OVER(PARTITION BY well_key ORDER BY production_month,id) first_rank,
                     ROW_NUMBER() OVER(PARTITION BY well_key ORDER BY production_month DESC,id DESC) last_rank
-             FROM production_monthly WHERE pressure IS NOT NULL
-           ) GROUP BY well_key"""
+             FROM {table} WHERE pressure IS NOT NULL{' AND run_id=?' if correction_run_id else ''}
+           ) GROUP BY well_key""", params
     )]
     status_rows = [dict(row) for row in conn.execute(
-        """SELECT well_key,status FROM (
+        f"""SELECT well_key,status FROM (
              SELECT well_key,status,production_month,id,
                     ROW_NUMBER() OVER(PARTITION BY well_key ORDER BY production_month DESC,id DESC) ordinal
-             FROM production_monthly WHERE status IS NOT NULL AND status<>''
-           ) WHERE ordinal=1"""
+             FROM {table} WHERE status IS NOT NULL AND status<>''{' AND run_id=?' if correction_run_id else ''}
+           ) WHERE ordinal=1""", params
     )]
     cumulative_rows = [dict(row) for row in conn.execute(
-        """SELECT well_key,
+        f"""SELECT well_key,
                   MAX(CASE WHEN oil_rank=1 THEN cumulative_oil END) cumulative_oil,
-                  MAX(CASE WHEN water_rank=1 THEN cumulative_water END) cumulative_water
+                  MAX(CASE WHEN water_rank=1 THEN cumulative_water END) cumulative_water,
+                  MAX(CASE WHEN gas_rank=1 THEN cumulative_gas END) cumulative_gas
            FROM (
-             SELECT well_key,cumulative_oil,cumulative_water,production_month,id,
+             SELECT well_key,cumulative_oil,cumulative_water,{cumulative_gas_column} cumulative_gas,production_month,id,
                     ROW_NUMBER() OVER(PARTITION BY well_key ORDER BY CASE WHEN cumulative_oil IS NULL THEN 1 ELSE 0 END,production_month DESC,id DESC) oil_rank,
-                    ROW_NUMBER() OVER(PARTITION BY well_key ORDER BY CASE WHEN cumulative_water IS NULL THEN 1 ELSE 0 END,production_month DESC,id DESC) water_rank
-             FROM production_monthly
-           ) GROUP BY well_key"""
+                    ROW_NUMBER() OVER(PARTITION BY well_key ORDER BY CASE WHEN cumulative_water IS NULL THEN 1 ELSE 0 END,production_month DESC,id DESC) water_rank,
+                    ROW_NUMBER() OVER(PARTITION BY well_key ORDER BY CASE WHEN {cumulative_gas_column} IS NULL THEN 1 ELSE 0 END,production_month DESC,id DESC) gas_rank
+             FROM {table}{where}
+           ) GROUP BY well_key""", params
+    )]
+    latest_rows = [dict(row) for row in conn.execute(
+        f"""SELECT well_key,liquid_rate,oil_rate,water_rate,gas_rate,production_month
+           FROM (
+             SELECT well_key,liquid_rate,oil_rate,water_rate,{gas_rate_column} gas_rate,production_month,id,
+                    ROW_NUMBER() OVER(PARTITION BY well_key ORDER BY production_month DESC,id DESC) ordinal
+             FROM {table}
+             WHERE {'run_id=? AND (' if correction_run_id else '('}liquid_rate IS NOT NULL OR oil_rate IS NOT NULL
+                OR water_rate IS NOT NULL{' OR gas_rate IS NOT NULL' if correction_run_id else ''})
+           ) WHERE ordinal=1""", params
     )]
     by_initial = {row["well_key"]: row for row in initial_rows}
     by_pressure = {row["well_key"]: row for row in pressure_rows}
     by_status = {row["well_key"]: row.get("status") for row in status_rows}
     by_cumulative = {row["well_key"]: row for row in cumulative_rows}
+    by_latest = {row["well_key"]: row for row in latest_rows}
     events_by_key: dict[str, list[dict]] = {}
     for row in events:
         events_by_key.setdefault(str(row.get("well_key") or ""), []).append(row)
@@ -485,13 +551,36 @@ def _production_dashboard_summaries(conn: sqlite3.Connection, events: list[dict]
             onstream = initial.get("production_month")
         latest_status = next((row.get("status") for row in reversed(events_for_well) if row.get("status")), None) or by_status.get(key)
         pressure_first, pressure_latest = pressure.get("pressure_first"), pressure.get("pressure_latest")
+        cumulative = by_cumulative.get(key, {})
+        cumulative_oil = cumulative.get("cumulative_oil") if cumulative.get("cumulative_oil") is not None else aggregate.get("cumulative_oil")
+        cumulative_water = cumulative.get("cumulative_water") if cumulative.get("cumulative_water") is not None else aggregate.get("cumulative_water")
+        cumulative_gas = cumulative.get("cumulative_gas") if cumulative.get("cumulative_gas") is not None else aggregate.get("cumulative_gas")
+        production_days = float(aggregate.get("production_days") or 0)
+        average_oil_rate = cumulative_oil / production_days if cumulative_oil is not None and production_days > 0 else aggregate.get("mean_oil_rate")
+        average_water_rate = cumulative_water / production_days if cumulative_water is not None and production_days > 0 else aggregate.get("mean_water_rate")
+        average_gas_rate = cumulative_gas / production_days if cumulative_gas is not None and production_days > 0 else aggregate.get("mean_gas_rate")
+        average_liquid_rate = (
+            (cumulative_oil + cumulative_water) / production_days
+            if cumulative_oil is not None and cumulative_water is not None and production_days > 0
+            else aggregate.get("mean_liquid_rate")
+        )
+        latest = by_latest.get(key, {})
+        latest_liquid_rate = latest.get("liquid_rate")
+        if latest_liquid_rate is None and any(latest.get(field) is not None for field in ("oil_rate", "water_rate")):
+            latest_liquid_rate = sum(latest.get(field) or 0 for field in ("oil_rate", "water_rate"))
         summaries.append({
             "well_key": key, "well_name": initial.get("well_name") or aggregate.get("well_name") or key,
             "onstream_date": onstream, "first_production_month": initial.get("production_month"),
             "production_months": aggregate.get("production_months") or 0,
             "initial_liquid_rate": liquid_rate, "initial_oil_rate": initial.get("oil_rate"),
-            "initial_water_cut": water_cut, "cumulative_oil": by_cumulative.get(key, {}).get("cumulative_oil") if by_cumulative.get(key, {}).get("cumulative_oil") is not None else aggregate.get("cumulative_oil"),
-            "cumulative_water": by_cumulative.get(key, {}).get("cumulative_water") if by_cumulative.get(key, {}).get("cumulative_water") is not None else aggregate.get("cumulative_water"), "pressure_first": pressure_first,
+            "initial_water_cut": water_cut, "production_days": production_days,
+            "cumulative_oil": cumulative_oil, "cumulative_water": cumulative_water,
+            "cumulative_gas": cumulative_gas,
+            "average_oil_rate": average_oil_rate, "average_water_rate": average_water_rate,
+            "average_liquid_rate": average_liquid_rate, "average_gas_rate": average_gas_rate,
+            "latest_oil_rate": latest.get("oil_rate"), "latest_water_rate": latest.get("water_rate"),
+            "latest_liquid_rate": latest_liquid_rate, "latest_gas_rate": latest.get("gas_rate"),
+            "latest_rate_month": latest.get("production_month"), "pressure_first": pressure_first,
             "pressure_latest": pressure_latest, "pressure_min": pressure.get("pressure_min"),
             "pressure_max": pressure.get("pressure_max"),
             "pressure_change": pressure_latest - pressure_first if pressure_first is not None and pressure_latest is not None else None,
@@ -513,7 +602,10 @@ def _production_dashboard_summaries(conn: sqlite3.Connection, events: list[dict]
             "onstream_date": next((row.get("event_date") for row in events_for_well if "投产" in str(row.get("event_type") or "")), None),
             "first_production_month": None, "production_months": 0,
             "initial_liquid_rate": None, "initial_oil_rate": None, "initial_water_cut": None,
-            "cumulative_oil": None, "cumulative_water": None,
+            "production_days": 0, "cumulative_oil": None, "cumulative_water": None, "cumulative_gas": None,
+            "average_oil_rate": None, "average_water_rate": None, "average_liquid_rate": None, "average_gas_rate": None,
+            "latest_oil_rate": None, "latest_water_rate": None, "latest_liquid_rate": None, "latest_gas_rate": None,
+            "latest_rate_month": None,
             "pressure_first": None, "pressure_latest": None, "pressure_min": None, "pressure_max": None,
             "pressure_change": None, "event_count": len(events_for_well), "latest_status": latest_status,
         })
@@ -682,8 +774,53 @@ def create_app(test_config: dict | None = None) -> Flask:
     database = Database(app.config["DATABASE"])
     importer = ImportService(database)
     job_manager = ImportJobManager()
+    correction_manager = correction_tools.ProductionCorrectionManager()
+    training_manager = ProductionTrainingManager()
+    clustering_cache_lock = threading.Lock()
     app.extensions["geo_database"] = database
     app.extensions["geo_jobs"] = job_manager
+    app.extensions["production_correction_jobs"] = correction_manager
+    app.extensions["production_clustering_jobs"] = training_manager
+
+    def active_production_correction(conn: sqlite3.Connection) -> dict | None:
+        row = conn.execute(
+            "SELECT * FROM production_correction_runs WHERE status='complete' ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        try:
+            result["summary"] = json.loads(result.pop("summary_json") or "{}")
+        except (TypeError, ValueError):
+            result["summary"] = {}
+        result["available"] = Path(result["corrected_mdb_path"]).is_file()
+        return result if result["available"] else None
+
+    def production_source(conn: sqlite3.Connection, requested: str | None = None) -> tuple[str, dict | None]:
+        correction = active_production_correction(conn)
+        requested = str(requested or "").strip().lower()
+        mode = "original" if requested == "original" or not correction else "corrected"
+        return mode, correction
+
+    def production_monthly_rows(conn: sqlite3.Connection, mode: str, correction: dict | None, well_keys: list[str] | None = None) -> list[dict]:
+        keys = list(dict.fromkeys(value for value in (well_keys or []) if value))
+        if mode == "corrected" and correction:
+            params: list[Any] = [int(correction["id"])]
+            where = "run_id=?"
+            if keys:
+                where += f" AND well_key IN ({','.join('?' for _ in keys)})"
+                params.extend(keys)
+            return [dict(row) for row in conn.execute(
+                f"SELECT *, '生产动态_校正.mdb' filename, '校正快照' batch, 'active' version FROM production_corrected_monthly WHERE {where} ORDER BY well_key,production_month,id",
+                params,
+            )]
+        params = list(keys)
+        where = f"WHERE pm.well_key IN ({','.join('?' for _ in keys)})" if keys else ""
+        return [dict(row) for row in conn.execute(
+            f"""SELECT pm.*,s.filename,s.batch,s.version FROM production_monthly pm
+                JOIN sources s ON s.id=pm.source_id {where} ORDER BY pm.well_key,pm.production_month,pm.id""",
+            params,
+        )]
 
     def snapshot_or_none():
         snapshot = load_snapshot(workspace_context["snapshot_path"])
@@ -742,13 +879,27 @@ def create_app(test_config: dict | None = None) -> Flask:
     def complete_las_profile_for_export(conn, snapshot):
         """Use the cached full LAS-header profile, building it only when an export needs it."""
         profile = curve_profile(snapshot)
-        # Older workspaces wrote this marker as ``source``.  Accept both so an
-        # export does not rescan every LAS header before it starts writing.
-        profile_scope = profile.get("scope") or profile.get("source")
-        if profile.get("schema_version") == 2 and profile_scope == "all_las_headers":
+        if curve_tools.curve_profile_is_current(conn, snapshot, profile):
             return profile, False
         profile = curve_tools.build_curve_profile(conn, snapshot, process_directory() / "curve_profile.json")
         return profile, True
+
+    def reconcile_imported_sources(rows: list[dict[str, Any]], include_historical: bool = False) -> dict[str, Any]:
+        """Commit imported source objects to the tree and refresh LAS export metadata."""
+        snapshot = snapshot_or_none()
+        if not snapshot:
+            return {"catalog": {"sources": 0, "items": 0, "missing": 0}, "profile_rebuilt": False}
+        source_ids = None if include_historical else [int(row["source_id"]) for row in rows if row.get("source_id")]
+        root = str(Path(snapshot["project"]["root"]).resolve())
+        with database.connect() as conn:
+            catalog = sync_imported_sources_to_catalog(conn, root, source_ids)
+            rebuild = include_historical or any(row.get("data_type") == "las" for row in rows)
+            if rebuild:
+                profile = curve_tools.load_curve_profile(snapshot, process_directory() / "curve_profile.json")
+                rebuild = not curve_tools.curve_profile_is_current(conn, snapshot, profile)
+                if rebuild:
+                    curve_tools.build_curve_profile(conn, snapshot, process_directory() / "curve_profile.json")
+        return {"catalog": catalog, "profile_rebuilt": rebuild}
 
     def export_curve_type_inventory(conn, snapshot, profile, allowed_wells):
         """Return selectable curve types and the LAS mnemonics they currently own."""
@@ -1326,12 +1477,35 @@ def create_app(test_config: dict | None = None) -> Flask:
         with database.connect() as conn:
             filtered_wells, _ = project_wells_with_filter(conn, snapshot)
             allowed = {row["project_key"] for row in filtered_wells}
-            workbench = curve_tools.curve_workbench(conn, snapshot, curve_profile(snapshot), allowed)
+            profile = curve_profile(snapshot)
+            time_curves = [
+                row for row in curve_tools.curve_statistics(profile, allowed)
+                if curve_tools.is_time_depth_mnemonic(row["mnemonic"])
+            ]
+            inventory = time_depth_tools.build_time_depth_inventory(
+                conn,
+                str(Path(snapshot["project"]["root"]).resolve()),
+                profile,
+                query=request.args.get("q", ""),
+                kind=request.args.get("kind", ""),
+                allowed_wells=allowed,
+                limit=request.args.get("limit", 250, type=int),
+            )
+        compact_curves = []
+        for row in time_curves:
+            starts = [item["start"] for item in row.get("depths", []) if item.get("start") is not None]
+            stops = [item["stop"] for item in row.get("depths", []) if item.get("stop") is not None]
+            compact_curves.append({
+                "mnemonic": row["mnemonic"], "well_count": row["well_count"], "file_count": row["file_count"],
+                "units": row.get("units", []), "steps": row.get("steps", []),
+                "depth_min": min(starts) if starts else None, "depth_max": max(stops) if stops else None,
+            })
         return jsonify({
-            "profile_source": workbench["profile_source"],
-            "sample_wells": workbench["sample_wells"],
-            "curves": workbench["time_depth_curves"],
-            "filtered": workbench["filtered"],
+            "profile_source": profile.get("source"),
+            "sample_wells": profile.get("sample_wells", 0),
+            "curves": compact_curves,
+            "filtered": True,
+            **inventory,
         })
 
     @app.post("/api/curve-profile/rebuild")
@@ -1763,6 +1937,23 @@ def create_app(test_config: dict | None = None) -> Flask:
         except (FileNotFoundError, OSError, ValueError, struct.error) as exc:
             return jsonify({"error": str(exc)}), 400
 
+    @app.post("/api/seismic-inventory/section")
+    def api_seismic_section():
+        snapshot = snapshot_or_none()
+        if not snapshot:
+            return jsonify({"error": "尚未载入项目快照，请先扫描或打开工区"}), 404
+        payload = request.get_json(silent=True) or {}
+        try:
+            return jsonify(seismic_section_tools.preview_section(
+                payload.get("path") or "",
+                snapshot["project"]["root"],
+                axis=payload.get("axis"), value=payload.get("value"),
+                max_traces=payload.get("max_traces", 160),
+                max_samples=payload.get("max_samples", 500),
+            ))
+        except (KeyError, TypeError, ValueError, OSError, struct.error) as exc:
+            return jsonify({"error": str(exc)}), 400
+
     @app.get("/api/polygons")
     def api_polygons():
         with database.connect() as conn:
@@ -1850,11 +2041,8 @@ def create_app(test_config: dict | None = None) -> Flask:
         start, end = str(payload.get("start") or "").strip(), str(payload.get("end") or "").strip()
         try:
             with database.connect() as conn:
-                rows = [dict(row) for row in conn.execute(
-                    """SELECT pm.*,s.filename,s.batch,s.version FROM production_monthly pm
-                       JOIN sources s ON s.id=pm.source_id
-                       WHERE pm.well_key=? ORDER BY pm.production_month,pm.id""", (well_key,)
-                )]
+                mode, correction = production_source(conn, payload.get("source_mode"))
+                rows = production_monthly_rows(conn, mode, correction, [well_key])
                 events = [dict(row) for row in conn.execute(
                     """SELECT pe.*,s.filename,s.batch,s.version FROM production_events pe
                        JOIN sources s ON s.id=pe.source_id
@@ -1887,9 +2075,11 @@ def create_app(test_config: dict | None = None) -> Flask:
             "x_axes": production_tools.PRODUCTION_X_AXES,
             "selected_fields": fields, "x_axis": x_axis,
             "fit": fit, "summary": summary,
+            "source_mode": mode,
+            "source_label": "校正 MDB" if mode == "corrected" else "原始 MDB",
             "production_formation": (dict(ofm_well).get("zone_name") if ofm_well else None) or "/".join(dict.fromkeys(str(row.get("interval_name")) for row in intervals if row.get("interval_name"))) or None,
             "range": {"start": start or None, "end": end or None},
-            "method": "仅查询当前井的生产/压力记录并按日期合并；同日压力与产量分别保留最后一个有效值。累产缺失时由月量逐期累加。",
+            "method": ("校正 MDB：基础日率 × 生产天数重建月产与累产；仅按需读取当前井。" if mode == "corrected" else "原始 MDB：仅查询当前井并按日期合并；保留原始派生值。"),
         })
 
     @app.get("/api/production")
@@ -1897,6 +2087,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         snapshot = snapshot_or_none()
         selected_well = normalize_well_name(request.args.get("well")) if request.args.get("well") else None
         with database.connect() as conn:
+            mode, correction = production_source(conn, request.args.get("source"))
             intervals = [dict(row) for row in conn.execute(
                 """SELECT pi.*,s.filename,s.batch,s.version FROM production_intervals pi
                    JOIN sources s ON s.id=pi.source_id ORDER BY pi.well_key,pi.top_md"""
@@ -1909,21 +2100,23 @@ def create_app(test_config: dict | None = None) -> Flask:
                        FROM project_catalog_items WHERE project_root=? AND category_key='production'
                        ORDER BY representative DESC,relative_path LIMIT 200""", (root,)
                 )]
-            monthly_record_count = int(conn.execute("SELECT COUNT(*) FROM production_monthly").fetchone()[0])
-            dynamic_wells = int(conn.execute(
-                "SELECT COUNT(*) FROM (SELECT well_key FROM production_monthly UNION SELECT well_key FROM production_events)"
-            ).fetchone()[0])
-            monthly = [dict(row) for row in conn.execute(
-                """SELECT pm.*,s.filename,s.batch,s.version FROM production_monthly pm
-                   JOIN sources s ON s.id=pm.source_id
-                   WHERE ? IS NOT NULL AND pm.well_key=? ORDER BY pm.production_month,pm.id""",
-                (selected_well, selected_well),
-            )] if selected_well else []
+            if mode == "corrected" and correction:
+                monthly_record_count = int(conn.execute("SELECT COUNT(*) FROM production_corrected_monthly WHERE run_id=?", (correction["id"],)).fetchone()[0])
+                dynamic_wells = int(conn.execute(
+                    "SELECT COUNT(*) FROM (SELECT well_key FROM production_corrected_monthly WHERE run_id=? UNION SELECT well_key FROM production_events)",
+                    (correction["id"],),
+                ).fetchone()[0])
+            else:
+                monthly_record_count = int(conn.execute("SELECT COUNT(*) FROM production_monthly").fetchone()[0])
+                dynamic_wells = int(conn.execute(
+                    "SELECT COUNT(*) FROM (SELECT well_key FROM production_monthly UNION SELECT well_key FROM production_events)"
+                ).fetchone()[0])
+            monthly = production_monthly_rows(conn, mode, correction, [selected_well]) if selected_well else []
             events = [dict(row) for row in conn.execute(
                 """SELECT pe.*,s.filename,s.batch,s.version FROM production_events pe
                    JOIN sources s ON s.id=pe.source_id ORDER BY pe.well_key,pe.event_date,pe.id"""
             )]
-            summaries = _production_dashboard_summaries(conn, events)
+            summaries = _production_dashboard_summaries(conn, events, int(correction["id"]) if mode == "corrected" and correction else None)
             known_wells = project_wells(conn, snapshot) if snapshot else analytics.wells(conn)
             alias_map = {row["alias_key"]: row["canonical_key"] for row in conn.execute("SELECT alias_key,canonical_key FROM alias_rules")}
             if snapshot:
@@ -2021,6 +2214,11 @@ def create_app(test_config: dict | None = None) -> Flask:
                     "interest": ofm_well.get("interest"),
                     "cumulative_oil_kbbl": summary.get("cumulative_oil") / 1000 if summary.get("cumulative_oil") is not None else None,
                     "cumulative_water_kbbl": summary.get("cumulative_water") / 1000 if summary.get("cumulative_water") is not None else None,
+                    "cumulative_liquid_kbbl": (
+                        (summary.get("cumulative_oil") + summary.get("cumulative_water")) / 1000
+                        if summary.get("cumulative_oil") is not None and summary.get("cumulative_water") is not None else None
+                    ),
+                    "cumulative_gas_raw": summary.get("cumulative_gas"),
                 })
         return jsonify({
             "files": files,
@@ -2042,33 +2240,212 @@ def create_app(test_config: dict | None = None) -> Flask:
             "ofm_deviation_count": ofm_deviation_count,
             "ofm_marker_count": ofm_marker_count,
             "field_contract": production_tools.PRODUCTION_FIELD_CONTRACT,
+            "production_source": {
+                "mode": mode,
+                "label": "校正 MDB（聚类当前数据源）" if mode == "corrected" else "原始 MDB",
+                "corrected_available": bool(correction),
+                "corrected_mdb_path": correction.get("corrected_mdb_path") if correction else None,
+                "run_id": correction.get("id") if correction else None,
+                "completed_at": correction.get("completed_at") if correction else None,
+            },
             "identity_rule": "生产动态是井实体存在的硬证据；精确名/已确认别名自动关联，模糊名只给候选、不得自动合并",
             "depth_reference": "MD",
         })
 
+    @app.get("/api/production/correction")
+    def api_production_correction_status():
+        query = str(request.args.get("q") or "").strip()
+        changed_only = str(request.args.get("changed_only") or "0").lower() in {"1", "true", "yes"}
+        try:
+            limit = max(20, min(1000, int(request.args.get("limit") or 300)))
+            offset = max(0, int(request.args.get("offset") or 0))
+        except (TypeError, ValueError):
+            return jsonify({"error": "分页参数格式不正确"}), 400
+        with database.connect() as conn:
+            correction = active_production_correction(conn)
+            if not correction:
+                source = conn.execute("SELECT os.source_id,os.file_path,s.filename FROM ofm_sources os JOIN sources s ON s.id=os.source_id ORDER BY os.id DESC LIMIT 1").fetchone()
+                return jsonify({"available": False, "source": dict(source) if source else None, "audit": [], "field_stats": []})
+            clauses, params = ["run_id=?"], [int(correction["id"])]
+            if query:
+                clauses.append("(UPPER(well_name) LIKE ? OR UPPER(field_label) LIKE ?)")
+                pattern = f"%{query.upper()}%"
+                params.extend([pattern, pattern])
+            if changed_only:
+                clauses.append("changed=1")
+            where = " AND ".join(clauses)
+            total = int(conn.execute(f"SELECT COUNT(*) FROM production_correction_audit WHERE {where}", params).fetchone()[0])
+            audit = [dict(row) for row in conn.execute(
+                f"SELECT * FROM production_correction_audit WHERE {where} ORDER BY changed DESC,well_name,field_label LIMIT ? OFFSET ?",
+                [*params, limit, offset],
+            )]
+            field_stats = [dict(row) for row in conn.execute(
+                """SELECT field_key,field_label,unit,COUNT(*) wells,SUM(changed) corrected
+                   FROM production_correction_audit WHERE run_id=? GROUP BY field_key,field_label,unit
+                   ORDER BY corrected DESC,field_label""", (correction["id"],)
+            )]
+        return jsonify({"available": True, "run": correction, "audit": audit, "field_stats": field_stats, "total": total, "limit": limit, "offset": offset})
+
+    @app.post("/api/production/correction")
+    def api_start_production_correction():
+        if not workspace_context["path"]:
+            return jsonify({"error": "请先打开或保存 .nvt 工区，再执行动态库校正"}), 400
+        job = correction_manager.submit(database.path, workspace_context["path"])
+        return jsonify(job), 202
+
+    @app.get("/api/production/correction/jobs/<job_id>")
+    def api_production_correction_job(job_id: str):
+        try:
+            return jsonify(correction_manager.status(job_id))
+        except KeyError:
+            return jsonify({"error": "校正任务不存在或软件已重新启动"}), 404
+
     def production_clustering_dataset(conn: sqlite3.Connection) -> dict:
-        monthly = [dict(row) for row in conn.execute(
-            "SELECT * FROM production_monthly ORDER BY well_key,production_month,id"
-        )]
-        events = [dict(row) for row in conn.execute(
-            "SELECT * FROM production_events ORDER BY well_key,event_date,id"
-        )]
-        intervals = [dict(row) for row in conn.execute(
-            "SELECT * FROM production_intervals ORDER BY well_key,top_md,id"
-        )]
-        ofm_wells = [dict(row) for row in conn.execute(
-            "SELECT * FROM ofm_wells ORDER BY well_key,id"
-        )]
-        # Standalone CSV imports may have coordinates in the unified well table
-        # without a corresponding OFM master-well row.
-        known = {row["well_key"] for row in ofm_wells}
-        for row in conn.execute("SELECT normalized_key,canonical_name,x,y FROM wells ORDER BY id"):
-            if row["normalized_key"] not in known:
-                ofm_wells.append({
-                    "well_key": row["normalized_key"], "well_name": row["canonical_name"],
-                    "x": row["x"], "y": row["y"],
-                })
-        return clustering_tools.build_feature_dataset(monthly, events, intervals, ofm_wells)
+        mode, correction = production_source(conn)
+        def table_marker(table: str, where: str = "", params: tuple = ()) -> tuple[int, int]:
+            row = conn.execute(
+                f"SELECT COUNT(*) AS row_count,COALESCE(MAX(id),0) AS max_id FROM {table} {where}", params,
+            ).fetchone()
+            return int(row["row_count"]), int(row["max_id"])
+
+        correction_id = int(correction["id"]) if mode == "corrected" and correction else None
+        monthly_marker = table_marker(
+            "production_corrected_monthly", "WHERE run_id=?", (correction_id,),
+        ) if correction_id is not None else table_marker("production_monthly")
+        signature = json.dumps({
+            "schema": 5, "mode": mode, "correction_id": correction_id,
+            "monthly": monthly_marker, "events": table_marker("production_events"),
+            "intervals": table_marker("production_intervals"), "ofm_wells": table_marker("ofm_wells"),
+            "wells": table_marker("wells"), "well_sources": table_marker("well_sources"),
+        }, sort_keys=True, separators=(",", ":"))
+
+        def cached_dataset() -> dict | None:
+            row = conn.execute(
+                "SELECT payload_json,built_at FROM production_clustering_feature_cache WHERE cache_key='active' AND source_signature=?",
+                (signature,),
+            ).fetchone()
+            if not row:
+                return None
+            try:
+                value = json.loads(row["payload_json"])
+            except (TypeError, ValueError):
+                return None
+            if not isinstance(value, dict) or not isinstance(value.get("wells"), list):
+                return None
+            value["performance"] = {"feature_cache": "hit", "built_at": row["built_at"]}
+            return value
+
+        dataset = cached_dataset()
+        if dataset is not None:
+            return dataset
+
+        # Only one request builds this materialized feature set at a time.
+        with clustering_cache_lock:
+            dataset = cached_dataset()
+            if dataset is not None:
+                return dataset
+            monthly = production_monthly_rows(conn, mode, correction)
+            events = [dict(row) for row in conn.execute(
+                "SELECT * FROM production_events ORDER BY well_key,event_date,id"
+            )]
+            intervals = [dict(row) for row in conn.execute(
+                "SELECT * FROM production_intervals ORDER BY well_key,top_md,id"
+            )]
+            ofm_wells = [dict(row) for row in conn.execute(
+                "SELECT * FROM ofm_wells ORDER BY well_key,id"
+            )]
+            # Standalone CSV imports may have coordinates in the unified well table
+            # without a corresponding OFM master-well row.
+            known = {row["well_key"]: row for row in ofm_wells}
+            for row in conn.execute("SELECT normalized_key,canonical_name,x,y FROM wells ORDER BY id"):
+                if row["normalized_key"] in known:
+                    target = known[row["normalized_key"]]
+                    if target.get("x") is None and row["x"] is not None:
+                        target["x"] = row["x"]
+                    if target.get("y") is None and row["y"] is not None:
+                        target["y"] = row["y"]
+                else:
+                    ofm_wells.append({
+                        "well_key": row["normalized_key"], "well_name": row["canonical_name"],
+                        "x": row["x"], "y": row["y"],
+                    })
+            dataset = clustering_tools.build_feature_dataset(monthly, events, intervals, ofm_wells)
+            feature_by_key = {row["well_key"]: row for row in dataset.get("wells", [])}
+            map_wells = []
+            seen_map_keys = set()
+            for source in ofm_wells:
+                key = str(source.get("well_key") or source.get("normalized_key") or "")
+                if not key or key in seen_map_keys:
+                    continue
+                seen_map_keys.add(key)
+                feature = feature_by_key.get(key) or {}
+                map_wells.append({
+                    "well_key": key,
+                    "well_name": source.get("well_name") or source.get("canonical_name") or feature.get("well_name") or key,
+                    "x": source.get("x") if source.get("x") is not None else source.get("surface_x"),
+                     "y": source.get("y") if source.get("y") is not None else source.get("surface_y"),
+                     "record_count": int(feature.get("record_count") or 0),
+                     "has_production": bool(feature.get("record_count")),
+                     "formations": list(feature.get("formations") or []),
+                 })
+            dataset["map_wells"] = map_wells
+        if mode == "corrected" and correction:
+            selected_path = str(correction.get("corrected_mdb_path") or "")
+            dataset["data_source"] = {
+                "mode": "corrected",
+                "selected": True,
+                "verified": True,
+                "label": "生产动态校正 MDB",
+                "filename": Path(selected_path).name or "生产动态_校正.mdb",
+                "path": selected_path,
+                "corrected_mdb_path": selected_path,
+                "source_path": correction.get("source_path"),
+                "run_id": correction.get("id"),
+                "completed_at": correction.get("completed_at"),
+                "well_count": correction.get("well_count"),
+                "record_count": correction.get("record_count"),
+                "corrected_well_count": correction.get("corrected_well_count"),
+                "corrected_value_count": correction.get("corrected_value_count"),
+                "inferred_days_count": correction.get("inferred_days_count"),
+                "scope": "01 数据体检至 09 二维展示",
+                "message": "本产能分型流程已锁定读取该校正快照，后续指标、训练、评价和成果不会回退到原始 MDB。",
+            }
+        else:
+            original = conn.execute(
+                """SELECT s.id source_id,s.filename,s.file_path,s.imported_at,s.record_count
+                   FROM sources s
+                   WHERE EXISTS(SELECT 1 FROM production_monthly pm WHERE pm.source_id=s.id)
+                   ORDER BY s.id DESC LIMIT 1"""
+            ).fetchone()
+            original = dict(original) if original else {}
+            selected_path = str(original.get("file_path") or "")
+            dataset["data_source"] = {
+                "mode": "original",
+                "selected": True,
+                "verified": False,
+                "label": "原始生产 MDB",
+                "filename": original.get("filename") or (Path(selected_path).name if selected_path else "尚未识别生产 MDB"),
+                "path": selected_path or None,
+                "corrected_mdb_path": None,
+                "source_id": original.get("source_id"),
+                "completed_at": None,
+                "well_count": len({row.get("well_key") for row in monthly if row.get("well_key")}),
+                "record_count": len(monthly),
+                "scope": "01 数据体检至 09 二维展示",
+                "message": "当前没有可用的校正 MDB，生产聚类仍在读取原始数据。请先到生产动态执行校正。",
+            }
+        built_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        conn.execute(
+            """INSERT INTO production_clustering_feature_cache(cache_key,source_signature,payload_json,well_count,built_at)
+               VALUES('active',?,?,?,?) ON CONFLICT(cache_key) DO UPDATE SET
+               source_signature=excluded.source_signature,payload_json=excluded.payload_json,
+               well_count=excluded.well_count,built_at=excluded.built_at""",
+            (signature, json.dumps(dataset, ensure_ascii=False, separators=(",", ":")),
+             len(dataset.get("wells") or []), built_at),
+        )
+        conn.commit()
+        dataset["performance"] = {"feature_cache": "rebuilt", "built_at": built_at}
+        return dataset
 
     @app.get("/api/production-clustering")
     def api_production_clustering():
@@ -2081,11 +2458,15 @@ def create_app(test_config: dict | None = None) -> Flask:
         sufficiently_long = sum(row["record_count"] >= 12 for row in wells)
         dataset["readiness"] = {
             "well_count": len(wells),
+            "map_well_count": len(dataset.get("map_wells") or []),
             "training_candidates": sum(row["record_count"] >= 3 for row in wells),
             "long_series_wells": sufficiently_long,
             "available_indicators": len(available),
             "default_indicators": len(selected),
-            "coordinate_wells": sum(row["x"] is not None and row["y"] is not None for row in wells),
+            "coordinate_wells": sum(
+                row.get("x") is not None and row.get("y") is not None
+                for row in dataset.get("map_wells") or []
+            ),
             "formation_wells": sum(bool(row["formations"]) for row in wells),
             "intervention_wells": sum(row["has_intervention"] for row in wells),
             "transformer_ready": sufficiently_long >= 50,
@@ -2100,41 +2481,345 @@ def create_app(test_config: dict | None = None) -> Flask:
         ]
         return jsonify(dataset)
 
-    @app.post("/api/production-clustering/train")
-    def api_train_production_clustering():
-        payload = request.get_json(silent=True) or {}
+    def load_saved_clustering_folder(folder: Path, fallback_id: str) -> dict | None:
+        """Read both current and pre-index clustering exports from one folder."""
+        configuration_path = folder / "训练配置.json"
+        summary_path = folder / "训练摘要.json"
+        rows_path = folder / "井产能分类结果.csv"
+        profiles_path = folder / "类别指标统计.csv"
+        full_result_path = folder / "完整训练结果.json"
+        if not configuration_path.is_file() and not summary_path.is_file():
+            return None
+
+        def read_json(path: Path) -> dict:
+            try:
+                value = json.loads(path.read_text(encoding="utf-8-sig"))
+                return value if isinstance(value, dict) else {}
+            except (OSError, UnicodeError, ValueError):
+                return {}
+
+        def number(value: Any) -> float | None:
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                return None
+            return parsed if math.isfinite(parsed) else None
+
+        configuration = read_json(configuration_path)
+        summary = read_json(summary_path)
+        result = read_json(full_result_path)
+        definitions = {row["key"]: row for row in clustering_tools.INDICATORS}
+        labels = {row["label"]: row for row in clustering_tools.INDICATORS}
+        selected = list(summary.get("selected_indicators") or configuration.get("indicators") or [])
+        category_order = list(summary.get("category_order") or [])
+        category_meta = {str(row.get("category")): row for row in category_order if row.get("category")}
+
+        if not result.get("ready") and rows_path.is_file():
+            result_rows = []
+            try:
+                with rows_path.open("r", newline="", encoding="utf-8-sig") as stream:
+                    for source in csv.DictReader(stream):
+                        category = str(source.get("产能类别") or "")
+                        meta = category_meta.get(category, {})
+                        rank = int(number(source.get("相对级次")) or meta.get("rank") or 0)
+                        cluster = int(number(meta.get("cluster")) or max(0, rank - 1))
+                        level = str(meta.get("level") or ("相对较好" if rank == 1 else "相对偏弱" if rank == len(category_order) else "中间过渡"))
+                        metrics = []
+                        for key in selected:
+                            definition = definitions.get(key, {"label": key, "unit": ""})
+                            metrics.append({
+                                "key": key, "label": definition.get("label", key),
+                                "unit": definition.get("unit", ""), "value": number(source.get(key)),
+                                "grade": "—",
+                            })
+                        name = str(source.get("井名") or "").strip()
+                        result_rows.append({
+                            "well_key": normalize_well_name(name), "well_name": name,
+                            "scope": str(source.get("范围") or "评价井"), "cluster": cluster,
+                            "category": category, "category_rank": rank, "category_level": level,
+                            "formations": [value.strip() for value in str(source.get("开发层位") or "").split("/") if value.strip()],
+                            "has_intervention": False, "metrics": metrics,
+                            "x": number(source.get("X")), "y": number(source.get("Y")),
+                            "x_plot": None, "y_plot": None,
+                        })
+            except (OSError, UnicodeError, csv.Error):
+                result_rows = []
+
+            profiles_by_category: dict[str, dict] = {}
+            if profiles_path.is_file():
+                try:
+                    with profiles_path.open("r", newline="", encoding="utf-8-sig") as stream:
+                        for source in csv.DictReader(stream):
+                            category = str(source.get("类别") or "")
+                            meta = category_meta.get(category, {})
+                            rank = int(number(source.get("相对级次")) or meta.get("rank") or 0)
+                            cluster = int(number(meta.get("cluster")) or max(0, rank - 1))
+                            profile = profiles_by_category.setdefault(category, {
+                                "cluster": cluster, "category": category, "rank": rank,
+                                "count": int(number(source.get("样本数")) or 0), "metrics": [],
+                            })
+                            definition = labels.get(str(source.get("指标") or ""), {})
+                            key = definition.get("key")
+                            if not key:
+                                position = len(profile["metrics"])
+                                key = selected[position] if position < len(selected) else str(source.get("指标") or "")
+                            profile["metrics"].append({
+                                "key": key, "label": str(source.get("指标") or definition.get("label") or key),
+                                "unit": str(source.get("单位") or definition.get("unit") or ""),
+                                "min": number(source.get("最小值")), "q1": number(source.get("Q1")),
+                                "median": number(source.get("中值")), "q3": number(source.get("Q3")),
+                                "max": number(source.get("最大值")),
+                            })
+                except (OSError, UnicodeError, csv.Error):
+                    profiles_by_category = {}
+            counts = {category: sum(row["category"] == category for row in result_rows) for category in category_meta}
+            result = {
+                **summary, "ready": bool(result_rows), "selected_indicators": selected,
+                "results": result_rows, "cluster_profiles": list(profiles_by_category.values()),
+                "cluster_counts": counts, "category_order": category_order,
+                "loss_history": [], "training_samples": [],
+                "projection": {"method": "历史方案（原导出未保存投影点）", "x_label": "—", "y_label": "—"},
+            }
+
+        plan_name = str(configuration.get("plan_name") or folder.name).strip()[:120] or folder.name
+        plan_id = str(configuration.get("plan_id") or fallback_id)
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", plan_id):
+            plan_id = fallback_id
+        saved_at = str(configuration.get("saved_at") or "")
+        if not saved_at:
+            try:
+                saved_at = datetime.fromtimestamp(folder.stat().st_mtime).astimezone().isoformat(timespec="seconds")
+            except OSError:
+                saved_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        return {
+            "id": plan_id, "name": plan_name, "configuration": configuration,
+            "result": result, "created_at": saved_at, "updated_at": saved_at,
+        }
+
+    def import_unindexed_clustering_plans(root: Path, conn: sqlite3.Connection) -> list[dict]:
+        """Index scheme folders produced before workspace-backed plan persistence existed."""
+        plans_root = root / "生产聚类"
+        if not plans_root.is_dir():
+            return []
+        existing_rows = conn.execute("SELECT plan_id,plan_name FROM production_clustering_plans").fetchall()
+        known_ids = {str(row["plan_id"]) for row in existing_rows}
+        known_names = {str(row["plan_name"]).casefold() for row in existing_rows}
+        imported = []
+        for index, folder in enumerate(sorted((path for path in plans_root.iterdir() if path.is_dir()), key=lambda path: path.name), 1):
+            # Folders created by the current save flow use the plan name.  Skip
+            # them before reading the (potentially large) full-result JSON.
+            # This keeps every later module mount from re-parsing exports that
+            # are already indexed in the workspace database.
+            if folder.name.casefold() in known_names:
+                continue
+            candidate = load_saved_clustering_folder(folder, f"legacy-{index:03d}")
+            if not candidate or candidate["id"] in known_ids or candidate["name"].casefold() in known_names:
+                continue
+            conn.execute(
+                """INSERT INTO production_clustering_plans(plan_id,plan_name,configuration_json,result_json,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?)""",
+                (candidate["id"], candidate["name"], json.dumps(candidate["configuration"], ensure_ascii=False),
+                 json.dumps(candidate["result"], ensure_ascii=False), candidate["created_at"], candidate["updated_at"]),
+            )
+            known_ids.add(candidate["id"])
+            known_names.add(candidate["name"].casefold())
+            imported.append(candidate)
+        if imported:
+            active = conn.execute(
+                "SELECT value_json FROM workspace_settings WHERE setting_key='production_clustering_active_plan'"
+            ).fetchone()
+            if not active:
+                timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+                conn.execute(
+                    "INSERT INTO workspace_settings(setting_key,value_json,updated_at) VALUES(?,?,?)",
+                    ("production_clustering_active_plan", json.dumps(imported[0]["id"], ensure_ascii=False), timestamp),
+                )
+            conn.commit()
+        return imported
+
+    @app.get("/api/production-clustering/state")
+    def api_production_clustering_state():
+        """Restore saved schemes and map groups from the active .nvt database."""
+        root = Path(workspace_context["path"] or Path(database.path).parent)
+        compact = str(request.args.get("compact") or "").strip().lower() in {"1", "true", "yes"}
+        with database.connect() as conn:
+            imported = import_unindexed_clustering_plans(root, conn)
+            if compact:
+                plan_rows = [dict(row) for row in conn.execute(
+                    """SELECT plan_id,plan_name,configuration_json,created_at,updated_at,
+                              COALESCE(json_extract(result_json,'$.ready'),0) result_ready,
+                              json_extract(result_json,'$.model') result_model,
+                              json_extract(result_json,'$.model_type') result_model_type,
+                              json_extract(result_json,'$.cluster_count') result_cluster_count,
+                              json_extract(result_json,'$.training_sample_count') result_training_sample_count,
+                              json_extract(result_json,'$.silhouette') result_silhouette
+                       FROM production_clustering_plans
+                       ORDER BY updated_at DESC,plan_id"""
+                )]
+            else:
+                plan_rows = [dict(row) for row in conn.execute(
+                    "SELECT * FROM production_clustering_plans ORDER BY updated_at DESC,plan_id"
+                )]
+            group_rows = [dict(row) for row in conn.execute(
+                "SELECT * FROM production_clustering_well_groups ORDER BY created_at,group_id"
+            )]
+            active_row = conn.execute(
+                "SELECT value_json FROM workspace_settings WHERE setting_key='production_clustering_active_plan'"
+            ).fetchone()
+        groups = []
+        for row in group_rows:
+            try:
+                well_keys = json.loads(row["well_keys_json"] or "[]")
+            except (TypeError, ValueError):
+                well_keys = []
+            groups.append({
+                "id": row["group_id"], "name": row["group_name"],
+                "well_keys": list(dict.fromkeys(str(value) for value in well_keys if value)),
+                "created_at": row["created_at"], "updated_at": row["updated_at"],
+            })
+        try:
+            active_plan_id = json.loads(active_row["value_json"]) if active_row else None
+        except (TypeError, ValueError):
+            active_plan_id = None
+        plan_ids = {str(row["plan_id"]) for row in plan_rows}
+        if active_plan_id not in plan_ids:
+            active_plan_id = str(plan_rows[0]["plan_id"]) if plan_rows else None
+        plans = []
+        for row in plan_rows:
+            try:
+                configuration = json.loads(row["configuration_json"] or "{}")
+                result = (
+                    {} if compact
+                    else json.loads(row["result_json"] or "{}")
+                )
+            except (TypeError, ValueError):
+                configuration, result = {}, {}
+            summary = None
+            has_result = bool(result.get("ready"))
+            if compact:
+                has_result = bool(row.get("result_ready"))
+                summary = {
+                    "ready": has_result,
+                    "model": row.get("result_model") or row.get("result_model_type"),
+                    "model_type": row.get("result_model_type"),
+                    "cluster_count": row.get("result_cluster_count"),
+                    "training_sample_count": row.get("result_training_sample_count"),
+                    "silhouette": row.get("result_silhouette"),
+                }
+            plans.append({
+                "id": row["plan_id"], "name": row["plan_name"],
+                "configuration": configuration, "result": result,
+                "result_summary": summary, "has_result": has_result,
+                "result_deferred": bool(compact and has_result),
+                "created_at": row["created_at"], "updated_at": row["updated_at"],
+            })
+        return jsonify({
+            "plans": plans, "well_groups": groups, "active_plan_id": active_plan_id,
+            "workspace": str(root), "migrated_plan_count": len(imported),
+        })
+
+    @app.get("/api/production-clustering/state/plans/<plan_id>")
+    def api_production_clustering_saved_plan(plan_id: str):
+        """Load one saved result only when the user activates or compares it."""
+        with database.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM production_clustering_plans WHERE plan_id=?", (plan_id,)
+            ).fetchone()
+        if not row:
+            return jsonify({"error": "没有找到该产能分型方案"}), 404
+        row = dict(row)
+        try:
+            configuration = json.loads(row["configuration_json"] or "{}")
+            result = json.loads(row["result_json"] or "{}")
+        except (TypeError, ValueError):
+            return jsonify({"error": "方案数据损坏，无法读取"}), 422
+        return jsonify({"plan": {
+            "id": row["plan_id"], "name": row["plan_name"],
+            "configuration": configuration, "result": result,
+            "has_result": bool(result.get("ready")), "result_deferred": False,
+            "created_at": row["created_at"], "updated_at": row["updated_at"],
+        }})
+
+    def production_training_spec(payload: dict) -> dict:
         model = str(payload.get("model") or "kmeans")
-        if model == "transformer":
-            return jsonify({
-                "ready": False, "jump_to": "model",
-                "error": "Transformer 为预留时序网络接口。本版先完成可解释聚类闭环；达到至少50口长序列井后再启用，避免小样本过拟合。",
-            }), 400
         if model not in {"kmeans", "som", "hierarchical"}:
-            return jsonify({"error": "未知模型类型"}), 400
+            if model == "transformer":
+                raise ValueError("Transformer 为预留时序网络接口；达到至少50口长序列井后再启用，避免小样本过拟合。")
+            raise ValueError("未知模型类型")
         try:
             cluster_count = max(2, min(12, int(payload.get("cluster_count") or 3)))
             max_iterations = max(5, min(500, int(payload.get("max_iterations") or 80)))
         except (TypeError, ValueError):
-            return jsonify({"error": "聚类数或迭代次数格式不正确"}), 400
+            raise ValueError("聚类数或迭代次数格式不正确")
         indicator_keys = payload.get("indicators") or []
         training_keys = payload.get("training_wells") or []
         evaluation_keys = payload.get("evaluation_wells") or []
         if not all(isinstance(value, list) for value in (indicator_keys, training_keys, evaluation_keys)):
-            return jsonify({"error": "指标与井清单格式不正确"}), 400
-        with database.connect() as conn:
+            raise ValueError("指标与井清单格式不正确")
+        return {
+            "model": model, "cluster_count": cluster_count, "max_iterations": max_iterations,
+            "indicator_keys": [str(value) for value in indicator_keys],
+            "training_keys": [str(value) for value in training_keys],
+            "evaluation_keys": [str(value) for value in evaluation_keys],
+            "segmentation_mode": str(payload.get("segmentation_mode") or "split"),
+            "model_parameters": payload.get("model_parameters") if isinstance(payload.get("model_parameters"), dict) else {},
+        }
+
+    def execute_production_training(
+        payload: dict, database_path: str | Path | None = None,
+        progress: Any = None,
+    ) -> dict:
+        spec = production_training_spec(payload)
+        selected_database = Database(database_path) if database_path is not None else database
+        if progress:
+            progress(0.04, "读取生产特征缓存")
+        with selected_database.connect() as conn:
             dataset = production_clustering_dataset(conn)
+        if progress:
+            cache_label = "复用工区特征缓存" if dataset.get("performance", {}).get("feature_cache") == "hit" else "完成生产特征缓存"
+            progress(0.12, cache_label)
+        mapped_progress = (lambda fraction, stage: progress(0.12 + fraction * 0.86, stage)) if progress else None
         result = clustering_tools.train_and_evaluate(
-            dataset, [str(value) for value in indicator_keys], [str(value) for value in training_keys],
-            [str(value) for value in evaluation_keys], cluster_count, max_iterations,
-            str(payload.get("segmentation_mode") or "split"),
-            model, payload.get("model_parameters") if isinstance(payload.get("model_parameters"), dict) else {},
+            dataset, spec["indicator_keys"], spec["training_keys"], spec["evaluation_keys"],
+            spec["cluster_count"], spec["max_iterations"], spec["segmentation_mode"],
+            spec["model"], spec["model_parameters"], mapped_progress,
         )
-        if model == "hierarchical" and result.get("ready"):
+        if spec["model"] == "hierarchical" and result.get("ready"):
             # The current dependency-free engine uses the same standardized
             # centroid baseline.  Surface that fact instead of mislabelling it.
             result["requested_model"] = "层次聚类"
             result["model_note"] = "当前版本以可复现 K-Means 基线完成训练；层次聚类参数已保存为后续扩展接口。"
+        result.setdefault("performance", {})["feature_cache"] = dataset.get("performance", {}).get("feature_cache", "unknown")
+        return result
+
+    @app.post("/api/production-clustering/train")
+    def api_train_production_clustering():
+        payload = request.get_json(silent=True) or {}
+        try:
+            result = execute_production_training(payload)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
         return jsonify(result)
+
+    @app.post("/api/production-clustering/training-jobs")
+    def api_start_production_clustering_training_job():
+        payload = request.get_json(silent=True) or {}
+        try:
+            production_training_spec(payload)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        submitted_database = Path(database.path)
+        job = training_manager.submit(
+            lambda progress: execute_production_training(payload, submitted_database, progress),
+        )
+        return jsonify(job), 202
+
+    @app.get("/api/production-clustering/training-jobs/<job_id>")
+    def api_production_clustering_training_job(job_id: str):
+        try:
+            return jsonify(training_manager.status(job_id))
+        except KeyError:
+            return jsonify({"error": "训练任务不存在或软件已重新启动"}), 404
 
     @app.post("/api/production-clustering/save")
     def api_save_production_clustering():
@@ -2143,12 +2828,24 @@ def create_app(test_config: dict | None = None) -> Flask:
         result = payload.get("result")
         if not isinstance(result, dict) or not result.get("ready") or not isinstance(result.get("results"), list):
             return jsonify({"error": "请先完成模型训练，再保存训练信息"}), 400
-        plan_name = str(payload.get("plan_name") or "产能分型方案 01").strip()
+        plan_name = str(payload.get("plan_name") or "产能分型方案 01").strip()[:120] or "产能分型方案"
+        plan_id = str(payload.get("plan_id") or f"plan-{datetime.now().strftime('%Y%m%d%H%M%S')}").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}", plan_id):
+            return jsonify({"error": "方案标识格式不正确"}), 400
+        with database.connect() as conn:
+            duplicate = conn.execute(
+                "SELECT plan_id FROM production_clustering_plans WHERE LOWER(plan_name)=LOWER(?) AND plan_id<>?",
+                (plan_name, plan_id),
+            ).fetchone()
+        if duplicate:
+            return jsonify({"error": f"方案名称“{plan_name}”已存在，请换一个名称"}), 409
         safe_name = re.sub(r'[<>:"/\\|?*]+', "_", plan_name).strip(". ") or "产能分型方案"
         root = Path(workspace_context["path"] or Path(database.path).parent)
         target = root / "生产聚类" / safe_name
         target.mkdir(parents=True, exist_ok=True)
-        configuration = payload.get("configuration") if isinstance(payload.get("configuration"), dict) else {}
+        configuration = dict(payload.get("configuration")) if isinstance(payload.get("configuration"), dict) else {}
+        configuration["plan_id"] = plan_id
+        configuration["plan_name"] = plan_name
         (target / "训练配置.json").write_text(json.dumps(configuration, ensure_ascii=False, indent=2), encoding="utf-8")
         summary = {key: result.get(key) for key in (
             "model", "model_type", "model_parameters", "selected_indicators", "training_count",
@@ -2156,6 +2853,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             "iterations", "inertia", "silhouette", "category_order", "notes",
         )}
         (target / "训练摘要.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        (target / "完整训练结果.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         indicator_keys = list(result.get("selected_indicators") or [])
         with (target / "井产能分类结果.csv").open("w", newline="", encoding="utf-8-sig") as stream:
             writer = csv.writer(stream)
@@ -2169,8 +2867,122 @@ def create_app(test_config: dict | None = None) -> Flask:
             for profile in result.get("cluster_profiles") or []:
                 for metric in profile.get("metrics") or []:
                     writer.writerow([profile.get("category"), profile.get("rank"), profile.get("count"), metric.get("label"), metric.get("unit"), metric.get("min"), metric.get("q1"), metric.get("median"), metric.get("q3"), metric.get("max")])
+        timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+        with database.connect() as conn:
+            conn.execute(
+                """INSERT INTO production_clustering_plans(plan_id,plan_name,configuration_json,result_json,created_at,updated_at)
+                   VALUES(?,?,?,?,?,?) ON CONFLICT(plan_id) DO UPDATE SET
+                   plan_name=excluded.plan_name,configuration_json=excluded.configuration_json,
+                   result_json=excluded.result_json,updated_at=excluded.updated_at""",
+                (plan_id, plan_name, json.dumps(configuration, ensure_ascii=False), json.dumps(result, ensure_ascii=False), timestamp, timestamp),
+            )
+            conn.execute(
+                """INSERT INTO workspace_settings(setting_key,value_json,updated_at) VALUES('production_clustering_active_plan',?,?)
+                   ON CONFLICT(setting_key) DO UPDATE SET value_json=excluded.value_json,updated_at=excluded.updated_at""",
+                (json.dumps(plan_id, ensure_ascii=False), timestamp),
+            )
+            conn.commit()
         files = [path.name for path in target.iterdir() if path.is_file()]
-        return jsonify({"saved": True, "folder": str(target), "files": sorted(files)})
+        return jsonify({
+            "saved": True, "folder": str(target), "files": sorted(files),
+            "plan": {"id": plan_id, "name": plan_name, "updated_at": timestamp},
+        })
+
+    @app.get("/api/production-clustering/well-groups")
+    def api_list_production_clustering_well_groups():
+        """List plan-independent well groups shared by production statistics and the 2D map."""
+        with database.connect() as conn:
+            rows = [dict(row) for row in conn.execute(
+                "SELECT * FROM production_clustering_well_groups ORDER BY updated_at DESC,group_name"
+            )]
+        groups = []
+        for row in rows:
+            try:
+                well_keys = json.loads(row["well_keys_json"] or "[]")
+            except (TypeError, ValueError):
+                well_keys = []
+            groups.append({
+                "id": row["group_id"], "name": row["group_name"],
+                "well_keys": list(dict.fromkeys(str(value) for value in well_keys if value)),
+                "created_at": row["created_at"], "updated_at": row["updated_at"],
+            })
+        return jsonify({"well_groups": groups})
+
+    @app.post("/api/production-clustering/well-groups")
+    def api_save_production_clustering_well_group():
+        """Persist a plan-independent spatial well group in the active .nvt."""
+        payload = request.get_json(silent=True) or {}
+        group_id = str(payload.get("id") or f"group-{datetime.now().strftime('%Y%m%d%H%M%S%f')}").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", group_id):
+            return jsonify({"error": "井组标识格式不正确"}), 400
+        group_name = str(payload.get("name") or "").strip()[:120]
+        if not group_name:
+            return jsonify({"error": "请输入井组名称"}), 400
+        raw_keys = payload.get("well_keys")
+        if not isinstance(raw_keys, list):
+            return jsonify({"error": "井组成员格式不正确"}), 400
+        well_keys = list(dict.fromkeys(str(value).strip() for value in raw_keys if str(value).strip()))
+        if not well_keys:
+            return jsonify({"error": "井组至少需要一口井"}), 400
+        if len(well_keys) > 50_000:
+            return jsonify({"error": "单个井组成员数超过上限"}), 400
+        timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+        with database.connect() as conn:
+            duplicate = conn.execute(
+                "SELECT group_id FROM production_clustering_well_groups WHERE LOWER(group_name)=LOWER(?) AND group_id<>?",
+                (group_name, group_id),
+            ).fetchone()
+            if duplicate:
+                return jsonify({"error": f"井组名称“{group_name}”已存在"}), 409
+            conn.execute(
+                """INSERT INTO production_clustering_well_groups(group_id,group_name,well_keys_json,created_at,updated_at)
+                   VALUES(?,?,?,?,?) ON CONFLICT(group_id) DO UPDATE SET
+                   group_name=excluded.group_name,well_keys_json=excluded.well_keys_json,updated_at=excluded.updated_at""",
+                (group_id, group_name, json.dumps(well_keys, ensure_ascii=False), timestamp, timestamp),
+            )
+            conn.commit()
+        return jsonify({
+            "saved": True,
+            "group": {"id": group_id, "name": group_name, "well_keys": well_keys, "updated_at": timestamp},
+        })
+
+    @app.patch("/api/production-clustering/well-groups/<group_id>")
+    def api_rename_production_clustering_well_group(group_id: str):
+        """Rename one plan-independent spatial well group without changing members."""
+        group_id = str(group_id or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", group_id):
+            return jsonify({"error": "井组标识格式不正确"}), 400
+        payload = request.get_json(silent=True) or {}
+        group_name = str(payload.get("name") or "").strip()[:120]
+        if not group_name:
+            return jsonify({"error": "请输入井组名称"}), 400
+        timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+        with database.connect() as conn:
+            existing = conn.execute(
+                "SELECT well_keys_json,created_at FROM production_clustering_well_groups WHERE group_id=?",
+                (group_id,),
+            ).fetchone()
+            if not existing:
+                return jsonify({"error": "井组不存在或已被删除"}), 404
+            duplicate = conn.execute(
+                "SELECT group_id FROM production_clustering_well_groups WHERE LOWER(group_name)=LOWER(?) AND group_id<>?",
+                (group_name, group_id),
+            ).fetchone()
+            if duplicate:
+                return jsonify({"error": f"井组名称“{group_name}”已存在"}), 409
+            conn.execute(
+                "UPDATE production_clustering_well_groups SET group_name=?,updated_at=? WHERE group_id=?",
+                (group_name, timestamp, group_id),
+            )
+            conn.commit()
+        try:
+            well_keys = json.loads(existing["well_keys_json"] or "[]")
+        except (TypeError, ValueError):
+            well_keys = []
+        return jsonify({
+            "saved": True,
+            "group": {"id": group_id, "name": group_name, "well_keys": well_keys, "updated_at": timestamp},
+        })
 
     @app.post("/api/production-clustering/curves")
     def api_production_clustering_curves():
@@ -2185,10 +2997,8 @@ def create_app(test_config: dict | None = None) -> Flask:
             return jsonify({"curves": [], "truncated": False})
         placeholders = ",".join("?" for _ in well_keys)
         with database.connect() as conn:
-            monthly = [dict(row) for row in conn.execute(
-                f"SELECT * FROM production_monthly WHERE well_key IN ({placeholders}) ORDER BY well_key,production_month,id",
-                well_keys,
-            )]
+            mode, correction = production_source(conn)
+            monthly = production_monthly_rows(conn, mode, correction, well_keys)
             events = [dict(row) for row in conn.execute(
                 f"SELECT * FROM production_events WHERE well_key IN ({placeholders}) ORDER BY well_key,event_date,id",
                 well_keys,
@@ -2690,6 +3500,115 @@ def create_app(test_config: dict | None = None) -> Flask:
         except (KeyError, TypeError, ValueError, OSError, sqlite3.Error) as exc:
             return jsonify({"error": str(exc)}), 400
 
+    @app.get("/api/reserves")
+    def api_reserves():
+        snapshot = snapshot_or_none()
+        if not snapshot:
+            return jsonify({"error": "尚未载入项目快照"}), 404
+        try:
+            with database.connect() as conn:
+                return jsonify({
+                    "surfaces": reserve_tools.surface_inventory(conn, snapshot),
+                    "groups": reserve_tools.list_groups(conn),
+                    "parameters": reserve_tools.PARAMETERS,
+                    "method": "构造面确定参考网格；属性面最近节点重采样；常数只在有效网格内参与计算。",
+                })
+        except (ValueError, OSError, sqlite3.Error) as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.post("/api/reserves/surface-quality")
+    def api_reserve_surface_quality():
+        snapshot = snapshot_or_none()
+        if not snapshot:
+            return jsonify({"error": "尚未载入项目快照"}), 404
+        payload = request.get_json(silent=True) or {}
+        try:
+            with database.connect() as conn:
+                grid = reserve_tools.resolve_surface(conn, snapshot, payload.get("surface_id"))
+                wells, filter_meta = project_wells_with_filter(conn, snapshot)
+            return jsonify({
+                "quality": surface_qc_tools.surface_quality(grid),
+                "wells": surface_qc_tools.well_surface_samples(grid, wells),
+                "well_filter": filter_meta,
+            })
+        except (ValueError, TypeError, OSError, sqlite3.Error) as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.post("/api/reserves/surface-compare")
+    def api_reserve_surface_compare():
+        snapshot = snapshot_or_none()
+        if not snapshot:
+            return jsonify({"error": "尚未载入项目快照"}), 404
+        payload = request.get_json(silent=True) or {}
+        try:
+            with database.connect() as conn:
+                result = surface_qc_tools.compare_surfaces(conn, snapshot, payload.get("surface_ids"))
+            return jsonify(result)
+        except (ValueError, TypeError, OSError, sqlite3.Error) as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.post("/api/reserves/surfaces/import")
+    def api_import_reserve_surfaces():
+        files = request.files.getlist("files")
+        if not files:
+            return jsonify({"error": "请选择至少一个 ZMAP 属性面"}), 400
+        target_dir = process_directory() / "reserve_surfaces"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        imported, errors = [], []
+        for index, uploaded in enumerate(files):
+            original = Path(uploaded.filename or f"surface_{index + 1}.zmap").name
+            suffix = Path(original).suffix.lower()
+            if suffix not in reserve_tools.SURFACE_SUFFIXES:
+                errors.append({"filename": original, "error": "仅支持 ZMAP、FSASCI、规则 XYZ 等文本平面"})
+                continue
+            safe = secure_filename(original) or f"surface{suffix}"
+            destination = target_dir / f"{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{index}_{safe}"
+            uploaded.save(destination)
+            try:
+                with database.connect() as conn:
+                    imported.append(reserve_tools.import_surface(conn, destination, original))
+            except (ValueError, OSError, sqlite3.Error) as exc:
+                destination.unlink(missing_ok=True)
+                errors.append({"filename": original, "error": str(exc)})
+        status = 201 if imported else 400
+        return jsonify({"surfaces": imported, "errors": errors}), status
+
+    @app.post("/api/reserves/groups")
+    def api_create_reserve_group():
+        try:
+            with database.connect() as conn:
+                return jsonify(reserve_tools.save_group(conn, request.get_json(silent=True) or {})), 201
+        except (ValueError, sqlite3.Error) as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.put("/api/reserves/groups/<group_id>")
+    def api_update_reserve_group(group_id: str):
+        try:
+            with database.connect() as conn:
+                return jsonify(reserve_tools.save_group(conn, request.get_json(silent=True) or {}, group_id))
+        except (ValueError, sqlite3.Error) as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.delete("/api/reserves/groups/<group_id>")
+    def api_delete_reserve_group(group_id: str):
+        try:
+            with database.connect() as conn:
+                reserve_tools.delete_group(conn, group_id)
+            return jsonify({"ok": True})
+        except sqlite3.Error as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.post("/api/reserves/calculate")
+    def api_calculate_reserves():
+        snapshot = snapshot_or_none()
+        if not snapshot:
+            return jsonify({"error": "尚未载入项目快照"}), 404
+        try:
+            with database.connect() as conn:
+                return jsonify(reserve_tools.calculate(conn, snapshot, request.get_json(silent=True) or {}))
+        except (ValueError, OSError, sqlite3.Error) as exc:
+            return jsonify({"error": str(exc)}), 400
+
     @app.get("/api/sources")
     def api_sources():
         with database.connect() as conn:
@@ -2801,7 +3720,10 @@ def create_app(test_config: dict | None = None) -> Flask:
         project_root = Path(snapshot["project"]["root"]).resolve()
         with database.connect() as conn:
             row = conn.execute(
-                "SELECT file_path FROM project_catalog_items WHERE id=? AND project_root=?",
+                """SELECT i.file_path,
+                          EXISTS(SELECT 1 FROM sources s
+                                 WHERE lower(s.file_path)=lower(i.file_path) AND s.status='ready') imported
+                     FROM project_catalog_items i WHERE i.id=? AND i.project_root=?""",
                 (item_id, str(project_root)),
             ).fetchone()
         if not row:
@@ -2810,16 +3732,16 @@ def create_app(test_config: dict | None = None) -> Flask:
         try:
             target.relative_to(project_root)
         except ValueError:
-            return jsonify({"error": "拒绝访问工区目录以外的路径"}), 403
+            if not row["imported"]:
+                return jsonify({"error": "拒绝访问未登记的工区外部路径"}), 403
         if not target.exists():
             return jsonify({"error": "原始文件当前不可访问，可能是磁盘未连接或文件已移动"}), 404
         if os.name != "nt":
             return jsonify({"error": "当前系统不支持资源管理器定位"}), 501
         payload = request.get_json(silent=True) or {}
         mode = "folder" if payload.get("mode") == "folder" else "select"
-        command = ["explorer.exe", str(target.parent)] if mode == "folder" else ["explorer.exe", "/select,", str(target)]
         try:
-            subprocess.Popen(command)
+            launch = reveal_in_windows_explorer(target, mode)
         except OSError as exc:
             return jsonify({"error": f"无法打开 Windows 资源管理器：{exc}"}), 500
         return jsonify({
@@ -2827,6 +3749,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             "action": mode,
             "folder": str(target.parent),
             "filename": target.name,
+            **launch,
         })
 
     @app.post("/api/catalog/groups")
@@ -3566,7 +4489,10 @@ try {
             uploaded.save(target)
             paths.append(target)
         process_directory = workspace_context["path"] / "process" if workspace_context["path"] else DATA_DIR / "process"
-        return jsonify(job_manager.submit(paths, database.path, options, process_directory)), 202
+        return jsonify(job_manager.submit(
+            paths, database.path, options, process_directory,
+            completion_callback=reconcile_imported_sources,
+        )), 202
 
     @app.post("/api/import-jobs/path")
     def api_start_path_job():
@@ -3601,7 +4527,10 @@ try {
         options["data_type"] = options.get("data_type") or "auto"
         process_directory = workspace_context["path"] / "process" if workspace_context["path"] else DATA_DIR / "process"
         try:
-            return jsonify(job_manager.submit(paths, database.path, options, process_directory)), 202
+            return jsonify(job_manager.submit(
+                paths, database.path, options, process_directory,
+                completion_callback=reconcile_imported_sources,
+            )), 202
         except (OSError, ValueError) as exc:
             return jsonify({"error": str(exc)}), 400
 
@@ -3638,6 +4567,11 @@ try {
                 results.append(result.__dict__)
             except Exception as exc:
                 errors.append({"filename": uploaded.filename, "error": str(exc)})
+        if results:
+            try:
+                reconcile_imported_sources(results)
+            except Exception as exc:
+                errors.append({"filename": "工区资料索引", "error": str(exc)})
         status = 200 if results else 400
         return jsonify({"results": results, "errors": errors}), status
 
@@ -3660,6 +4594,11 @@ try {
                 results.append(result.__dict__)
             except Exception as exc:
                 errors.append({"filename": str(raw_path), "error": str(exc)})
+        if results:
+            try:
+                reconcile_imported_sources(results)
+            except Exception as exc:
+                errors.append({"filename": "工区资料索引", "error": str(exc)})
         return jsonify({"results": results, "errors": errors}), (200 if results else 400)
 
     @app.get("/api/export/wells.csv")
@@ -3697,15 +4636,16 @@ try {
         if not snapshot:
             return jsonify({"error": "请先扫描或打开一个工区，再导出原始数据"}), 404
         with database.connect() as conn:
+            sync_imported_sources_to_catalog(conn, snapshot["project"]["root"])
             wells, filter_meta = export_scope_project_wells(conn, snapshot)
             profile = curve_profile(snapshot)
+            complete = curve_tools.curve_profile_is_current(conn, snapshot, profile)
             types = export_curve_type_inventory(conn, snapshot, profile, {row["project_key"] for row in wells})
             dev_path_counts = [len({str(Path(path).resolve()) for path in row.get("_dev_paths", [])}) for row in wells]
             catalog_las = conn.execute(
                 "SELECT COUNT(*) count FROM project_catalog_items WHERE project_root=? AND category_key='well_logs'",
                 (str(Path(snapshot["project"]["root"]).resolve()),),
             ).fetchone()["count"]
-        complete = profile.get("schema_version") == 2 and profile.get("scope") == "all_las_headers"
         return jsonify({
             "types": types,
             "profile_complete": complete,
@@ -3735,6 +4675,158 @@ try {
             "sample_wells": profile.get("sample_wells", 0),
             "errors": profile.get("errors", []),
         })
+
+    @app.get("/api/data-export/well-las")
+    def api_data_export_well_las_search():
+        snapshot = snapshot_or_none()
+        if not snapshot:
+            return jsonify({"error": "请先扫描或打开一个工区"}), 404
+        query = str(request.args.get("q") or "").strip()
+        if not query:
+            return jsonify({"query": "", "wells": [], "profile_complete": False})
+        with database.connect() as conn:
+            profile, _ = complete_las_profile_for_export(conn, snapshot)
+        query_key = normalize_well_name(query)
+        groups: dict[str, dict[str, Any]] = {}
+        for row in profile.get("wells", []):
+            well_key = str(row.get("well_key") or "")
+            well_name = str(row.get("well_name") or well_key)
+            filename = str(row.get("filename") or "")
+            haystack = f"{well_name} {well_key} {filename}".upper()
+            compact = normalize_well_name(haystack)
+            if query.upper() not in haystack and (not query_key or query_key not in compact):
+                continue
+            group = groups.setdefault(well_key, {
+                "well_key": well_key, "well_name": well_name, "files": [], "curves": {},
+                "exact": bool(query_key and query_key == normalize_well_name(well_key)),
+            })
+            file_curves = []
+            for curve in row.get("curves", []):
+                mnemonic = str(curve.get("mnemonic") or "").upper().strip()
+                if not mnemonic:
+                    continue
+                item = {
+                    "mnemonic": mnemonic, "unit": curve.get("unit"),
+                    "description": curve.get("description"), "filename": filename,
+                }
+                file_curves.append(item)
+                aggregate = group["curves"].setdefault(mnemonic, {
+                    "mnemonic": mnemonic, "units": set(), "descriptions": set(), "files": set(),
+                })
+                if curve.get("unit"):
+                    aggregate["units"].add(str(curve["unit"]))
+                if curve.get("description"):
+                    aggregate["descriptions"].add(str(curve["description"]))
+                aggregate["files"].add(filename)
+            group["files"].append({
+                "filename": filename, "file_path": row.get("file_path"),
+                "start": row.get("start"), "stop": row.get("stop"), "step": row.get("step"),
+                "depth_unit": row.get("depth_unit"), "curves": file_curves,
+            })
+        result = []
+        for group in groups.values():
+            group["curves"] = [
+                {"mnemonic": item["mnemonic"], "units": sorted(item["units"]),
+                 "descriptions": sorted(item["descriptions"]), "file_count": len(item["files"]),
+                 "filenames": sorted(item["files"])}
+                for item in group["curves"].values()
+            ]
+            group["curves"].sort(key=lambda item: item["mnemonic"])
+            group["files"].sort(key=lambda item: item["filename"].lower())
+            group["curve_count"] = len(group["curves"])
+            group["file_count"] = len(group["files"])
+            result.append(group)
+        result.sort(key=lambda item: (not item["exact"], item["well_name"].upper()))
+        return jsonify({
+            "query": query, "wells": result[:30], "match_count": len(result),
+            "profile_complete": profile.get("schema_version") == 2 and (profile.get("scope") or profile.get("source")) == "all_las_headers",
+        })
+
+    @app.post("/api/data-export/well-las")
+    def api_data_export_well_las():
+        snapshot = snapshot_or_none()
+        payload = request.get_json(silent=True) or {}
+        if not snapshot:
+            return jsonify({"error": "请先扫描或打开一个工区"}), 404
+        well_key = normalize_well_name(payload.get("well_key"))
+        mnemonics = {str(value).upper().strip() for value in payload.get("mnemonics", []) if str(value).strip()}
+        if not well_key:
+            return jsonify({"error": "请选择一口井"}), 400
+        if not mnemonics:
+            return jsonify({"error": "请至少勾选一条曲线；DEPTH 会自动附加"}), 400
+        if len(mnemonics) > 200:
+            return jsonify({"error": "单次最多导出 200 条曲线"}), 400
+        step_raw = payload.get("resample_step")
+        try:
+            resample_step = float(step_raw) if step_raw not in (None, "") else None
+            if resample_step is not None and (not math.isfinite(resample_step) or resample_step <= 0):
+                raise ValueError
+        except (TypeError, ValueError):
+            return jsonify({"error": "重采样间隔必须为空或大于 0"}), 400
+        archive = None
+        try:
+            with database.connect() as conn:
+                profile, profile_built = complete_las_profile_for_export(conn, snapshot)
+                sources = []
+                project_root = str(Path(snapshot["project"]["root"]).resolve())
+                for row in profile.get("wells", []):
+                    if normalize_well_name(row.get("well_key")) != well_key:
+                        continue
+                    available = {str(curve.get("mnemonic") or "").upper().strip() for curve in row.get("curves", [])}
+                    selected = sorted(mnemonics & available)
+                    if not selected:
+                        continue
+                    path = Path(str(row.get("file_path") or ""))
+                    if not path.is_file():
+                        fallback = conn.execute(
+                            """SELECT file_path FROM project_catalog_items
+                               WHERE project_root=? AND category_key='well_logs' AND filename=? LIMIT 1""",
+                            (project_root, row.get("filename")),
+                        ).fetchone()
+                        path = Path(str(fallback["file_path"])) if fallback else path
+                    if path.is_file():
+                        sources.append({"path": path, "selected": selected, "well_name": row.get("well_name") or well_key})
+                if not sources:
+                    raise ValueError("该井没有包含所选曲线的可访问 LAS 文件")
+                archive = archive_target("well_curve_export_")
+                manifest = []
+                used_names: dict[str, int] = {}
+                with tempfile.TemporaryDirectory(prefix="well_las_", dir=str(process_directory())) as raw_temp:
+                    temporary = Path(raw_temp)
+                    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as bundle:
+                        for index, source in enumerate(sorted(sources, key=lambda item: str(item["path"]).lower()), 1):
+                            base = f"{source['well_name']}_{source['path'].stem}_selected"
+                            output_name = _las_curve_filename(base, used_names, index)
+                            output_path = temporary / output_name
+                            meta = las_export_tools.build_selected_las(
+                                source["path"], source["selected"], output_path, resample_step=resample_step,
+                            )
+                            bundle.write(output_path, f"LAS/{output_name}")
+                            manifest.append({
+                                "well_name": source["well_name"], "well_key": well_key,
+                                "source_file": source["path"].name, "output_file": output_name,
+                                "depth_mnemonic": meta["depth_mnemonic"], "depth_unit": meta["depth_unit"],
+                                "selected_mnemonics": " | ".join(meta["mnemonics"]),
+                                "start": meta["start"], "stop": meta["stop"], "step": meta["step"],
+                                "sample_rows": meta["sample_rows"], "resampled": "yes" if meta["resampled"] else "no",
+                            })
+                        bundle.writestr("LAS/导出清单.csv", _csv_bytes(
+                            ["well_name", "well_key", "source_file", "output_file", "depth_mnemonic", "depth_unit", "selected_mnemonics", "start", "stop", "step", "sample_rows", "resampled"],
+                            manifest,
+                        ))
+                        bundle.writestr("README.txt", (
+                            "地数镜 单井选曲线标准 LAS 导出\n\n"
+                            "每份输出均自动包含源文件的 DEPTH/MD 道，并仅保留人工勾选的曲线。\n"
+                            "曲线分布在不同源 LAS 时分别输出，不擅自跨文件拼接。\n"
+                            f"重采样：{f'{resample_step:g}（源深度单位）' if resample_step is not None else '保持各源文件原始采样'}。\n"
+                            f"首次建立完整 LAS 头段画像：{'是' if profile_built else '否'}。\n"
+                        ))
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            return archive_response(archive, f"{well_key}_选曲线标准LAS_{stamp}.zip")
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            if archive:
+                archive.unlink(missing_ok=True)
+            return jsonify({"error": str(exc)}), 400
 
     @app.post("/api/data-export/las")
     def api_data_export_las():
@@ -3991,6 +5083,20 @@ try {
             switch_workspace(info["path"])
             snapshot = snapshot_or_none()
             return jsonify({**info, "project": snapshot.get("project") if snapshot else None})
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.post("/api/workspace/relocate-paths")
+    def api_workspace_relocate_paths():
+        if not workspace_context["path"]:
+            return jsonify({"error": "请先打开需要更改路径的 .nvt 工区"}), 400
+        payload = request.get_json(silent=True) or {}
+        try:
+            result = relocate_paths(
+                workspace_context["path"], payload.get("old_prefix") or "",
+                payload.get("new_prefix") or "", apply=payload.get("apply") is True,
+            )
+            return jsonify(result)
         except (OSError, ValueError, sqlite3.Error) as exc:
             return jsonify({"error": str(exc)}), 400
 

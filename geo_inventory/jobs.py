@@ -6,7 +6,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .db import Database
 from .importers import ImportService
@@ -27,6 +27,7 @@ class ImportJobManager:
         database_path: str | Path,
         options: dict[str, Any],
         process_directory: str | Path | None = None,
+        completion_callback: Callable[[list[dict[str, Any]]], None] | None = None,
     ) -> dict[str, Any]:
         resolved = [Path(path).resolve() for path in paths]
         if not resolved:
@@ -45,7 +46,12 @@ class ImportJobManager:
         }
         with self._lock:
             self._jobs[job_id] = job
-        thread = threading.Thread(target=self._run_import, args=(job_id, Path(database_path), resolved, options), daemon=True, name=f"geo-import-{job_id[:8]}")
+        thread = threading.Thread(
+            target=self._run_import,
+            args=(job_id, Path(database_path), resolved, options, completion_callback),
+            daemon=True,
+            name=f"geo-import-{job_id[:8]}",
+        )
         thread.start()
         return self.status(job_id)
 
@@ -61,12 +67,20 @@ class ImportJobManager:
             rows = sorted(self._jobs.values(), key=lambda row: row["created_at"], reverse=True)[:limit]
             return [self._public(row) for row in rows]
 
-    def _run_import(self, job_id: str, database_path: Path, paths: list[Path], options: dict[str, Any]) -> None:
+    def _run_import(
+        self,
+        job_id: str,
+        database_path: Path,
+        paths: list[Path],
+        options: dict[str, Any],
+        completion_callback: Callable[[list[dict[str, Any]]], None] | None = None,
+    ) -> None:
         database = Database(database_path)
         importer = ImportService(database)
         weights = [max(path.stat().st_size, 1024 * 1024) for path in paths]
         total_weight = max(1, sum(weights))
         completed_weight = 0
+        completed_imports: list[dict[str, Any]] = []
         self._update(job_id, status="running", stage="开始解析", started_at=utcnow(), _started_monotonic=time.monotonic())
         for index, (path, weight) in enumerate(zip(paths, weights)):
             self._update_file(job_id, index, status="running", progress=0.0)
@@ -84,6 +98,7 @@ class ImportJobManager:
                 result = importer.import_path(path, progress_callback=callback, **options)
                 with self._lock:
                     self._jobs[job_id]["results"].append(result.__dict__)
+                completed_imports.append({**result.__dict__, "file_path": str(path)})
                 self._update_file(job_id, index, status="complete", progress=1.0)
             except Exception as exc:
                 with self._lock:
@@ -92,6 +107,13 @@ class ImportJobManager:
             completed_weight += weight
             overall = completed_weight / total_weight
             self._update(job_id, progress=overall, percent=round(overall * 100))
+        if completed_imports and completion_callback:
+            self._update(job_id, stage="更新工区资料树与导出索引", progress=0.99, percent=99, current_file=None)
+            try:
+                completion_callback(completed_imports)
+            except Exception as exc:
+                with self._lock:
+                    self._jobs[job_id]["errors"].append({"filename": "工区资料索引", "error": str(exc)})
         with self._lock:
             errors = self._jobs[job_id]["errors"]
             results = self._jobs[job_id]["results"]
@@ -126,4 +148,3 @@ class ImportJobManager:
     @staticmethod
     def _public(job: dict[str, Any]) -> dict[str, Any]:
         return {key: value for key, value in job.items() if not key.startswith("_")}
-

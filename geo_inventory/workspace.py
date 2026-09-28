@@ -10,8 +10,8 @@ from typing import Any
 from .db import Database
 
 
-WORKSPACE_FORMAT_VERSION = 5
-APP_VERSION = "0.6.1"
+WORKSPACE_FORMAT_VERSION = 6
+APP_VERSION = "0.7.0"
 
 
 def utcnow() -> str:
@@ -126,6 +126,19 @@ class WorkspaceManager:
             target_process = (target / "process").resolve()
             if source_process_path.is_dir() and source_process_path != target_process:
                 shutil.copytree(source_process_path, target_process, dirs_exist_ok=True)
+                # Reserve ZMAP files are workspace process assets rather than
+                # external source data.  After the process directory is copied,
+                # repoint the copied database so reopening the .nvt does not
+                # depend on the previous temporary workspace location.
+                with Database(target_db).connect() as conn:
+                    for row in conn.execute("SELECT surface_id,file_path FROM reserve_surfaces"):
+                        try:
+                            relative = Path(row["file_path"]).resolve().relative_to(source_process_path)
+                        except (OSError, ValueError):
+                            continue
+                        relocated = target_process / relative
+                        if relocated.is_file():
+                            conn.execute("UPDATE reserve_surfaces SET file_path=?,updated_at=? WHERE surface_id=?", (str(relocated), utcnow(), row["surface_id"]))
 
         old = self._read_manifest(target)
         now = utcnow()

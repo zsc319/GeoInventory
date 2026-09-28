@@ -1,12 +1,12 @@
-param(
-    [string]$Version = "0.6.1",
+﻿param(
+    [string]$Version = "0.7.0",
     [string]$PythonExe = ""
 )
 
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $python = if ($PythonExe) { (Resolve-Path -LiteralPath $PythonExe).Path } else { (Get-Command python -ErrorAction Stop).Source }
-$releaseRoot = Join-Path $projectRoot ".release_work\public-v$Version-20260914"
+$releaseRoot = Join-Path $projectRoot (".release_work\public-v{0}-{1}" -f $Version, (Get-Date -Format "yyyyMMdd"))
 $distPath = Join-Path $releaseRoot "dist"
 $workPath = Join-Path $releaseRoot "build"
 $packagePath = Join-Path $releaseRoot "package\GeoInventory-v$Version-Windows-x64"

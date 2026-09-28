@@ -13,6 +13,7 @@ from typing import Any, Iterable
 
 from .geometry import convex_hull, ring_area
 from .importers import normalize_well_name, parse_las, scan_segy
+from .time_depth import is_time_depth_file
 
 
 SIDECAR_EXTENSIONS = {".xml", ".prj", ".shx", ".dbf", ".sbn", ".sbx"}
@@ -44,8 +45,8 @@ def build_project_snapshot(
     wellhead_file = next((item for item in wellhead_candidates if item.suffix == ""), None) or (_median_file(wellhead_candidates) if wellhead_candidates else None)
     wellheads = parse_petrel_well_head(wellhead_file) if wellhead_file else {"count": 0, "wells": [], "points": [], "crs": None}
 
-    las_files = [path for path in files if path.suffix.lower() == ".las" and "checkshot" not in _relative_lower(root, path)]
-    checkshot_files = [path for path in files if path.suffix.lower() == ".las" and "checkshot" in _relative_lower(root, path)]
+    checkshot_files = [path for path in files if is_time_depth_file(root, path)]
+    las_files = [path for path in files if path.suffix.lower() == ".las" and path not in checkshot_files]
     dev_files = [path for path in files if path.suffix.lower() == ".dev"]
     coverage = _well_file_coverage(wellheads.get("wells", []), las_files, dev_files, checkshot_files)
     representative_analysis = analyze_representatives(root, representatives)
@@ -600,8 +601,8 @@ def _category_summary(root: Path, files: list[Path]) -> list[dict[str, Any]]:
     definitions = [
         ("well_heads", "井头", lambda p: "wellhead" in _relative_lower(root, p)),
         ("well_paths", "井轨迹", lambda p: p.suffix.lower() == ".dev"),
-        ("well_logs", "测井 LAS", lambda p: p.suffix.lower() == ".las" and "checkshot" not in _relative_lower(root, p)),
-        ("checkshots", "Checkshot", lambda p: "checkshot" in _relative_lower(root, p) and p.suffix.lower() == ".las"),
+        ("well_logs", "测井 LAS", lambda p: p.suffix.lower() == ".las" and not is_time_depth_file(root, p)),
+        ("checkshots", "时深关系", lambda p: is_time_depth_file(root, p)),
         ("well_tops", "井顶", lambda p: "welltops" in _relative_lower(root, p)),
         ("core", "岩心标定", lambda p: any(token in _relative_lower(root, p) for token in ("core", "rock", "plug", "thin section", "岩心", "岩芯", "取心", "岩样", "薄片"))),
         ("interpretations", "解释结论", lambda p: any(token in _relative_lower(root, p) for token in ("interpret", "reservoir", "解释", "孔渗", "饱和"))),
@@ -647,7 +648,7 @@ def _well_file_coverage(wellhead_rows: list[dict[str, Any]], las_files: list[Pat
 
 
 def _well_key_from_filename(path: Path) -> str:
-    stem = re.sub(r"(?i)(?:_?LOGS?|_?TZ(?:_?3D)?)$", "", path.stem)
+    stem = re.sub(r"(?i)(?:[_\- ]?(?:LOGS?|TZ(?:[_\- ]?3D)?|TDR|OWT|TWT|CHECKSHOTS?|TIME[_\- ]?DEPTH))+$", "", path.stem)
     return normalize_well_name(stem)
 
 

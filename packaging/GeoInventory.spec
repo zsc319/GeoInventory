@@ -25,7 +25,6 @@ a = Analysis(
         "IPython",
         "jupyter",
         "matplotlib",
-        "numpy",
         "pandas",
         "pytest",
         "scipy",

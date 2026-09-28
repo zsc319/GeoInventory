@@ -16,6 +16,7 @@ from .curve_analysis import is_time_depth_mnemonic
 from .db import Database
 from .importers import identity_similarity, normalize_well_name
 from .project_scan import SEISMIC_EXTENSIONS
+from .time_depth import is_time_depth_file
 from .well_identity import classify_well_identity
 
 
@@ -44,6 +45,19 @@ SOURCE_TYPES = {
     "well_tops": "well_top",
 }
 
+IMPORT_CATEGORIES = {
+    "well_head": "well_heads",
+    "deviation": "well_paths",
+    "las": "well_logs",
+    "checkshot": "checkshots",
+    "well_top": "well_tops",
+    "core": "core",
+    "interpretation": "interpretations",
+    "seismic": "seismic_3d",
+    "polygon": "polygons",
+    "production": "production",
+}
+
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -52,7 +66,7 @@ def utcnow() -> str:
 def classify_file(root: Path, path: Path) -> str:
     relative = str(path.relative_to(root)).replace("/", "\\").lower()
     suffix = path.suffix.lower()
-    if "checkshot" in relative and suffix == ".las":
+    if is_time_depth_file(root, path):
         return "checkshots"
     if suffix == ".las":
         return "well_logs"
@@ -119,6 +133,78 @@ def sync_project_catalog(database: Database, snapshot: dict[str, Any]) -> dict[s
     return {"items": len(rows), "representatives": len(representative_paths)}
 
 
+def sync_imported_sources_to_catalog(
+    conn: sqlite3.Connection,
+    project_root: str | Path,
+    source_ids: list[int] | tuple[int, ...] | None = None,
+) -> dict[str, int]:
+    """Expose successfully imported files in the active project's material tree.
+
+    Imported files may live beside the source project (for example in an NVT
+    workspace upload cache), so a normal project-directory rescan cannot see
+    them.  The import database is authoritative for these objects; this helper
+    projects its ready sources into the same catalog used by search and export.
+    """
+    root = Path(project_root).resolve()
+    where = ["status='ready'"]
+    params: list[Any] = []
+    if source_ids is not None:
+        identifiers = sorted({int(value) for value in source_ids})
+        if not identifiers:
+            return {"sources": 0, "items": 0, "missing": 0}
+        where.append(f"id IN ({','.join('?' for _ in identifiers)})")
+        params.extend(identifiers)
+    sources = [dict(row) for row in conn.execute(
+        f"""SELECT id,filename,file_path,data_type,imported_at
+            FROM sources WHERE {' AND '.join(where)} ORDER BY id""",
+        params,
+    )]
+    rows: list[tuple[Any, ...]] = []
+    missing = 0
+    for source in sources:
+        path = Path(source["file_path"]).expanduser().resolve()
+        category = IMPORT_CATEGORIES.get(str(source.get("data_type") or ""), "other")
+        # Preserve the physical folder layout when a file is already beneath
+        # the project root.  External/import-cache files receive a stable
+        # virtual path while retaining their real file_path for export/reveal.
+        try:
+            relative = path.relative_to(root)
+            relative_text = str(relative)
+            source_folder = str(relative.parent) if str(relative.parent) != "." else "项目根目录"
+            category = classify_file(root, path)
+        except ValueError:
+            parent_label = path.parent.name or "外部目录"
+            relative_text = str(Path("导入资料") / parent_label / path.name)
+            source_folder = f"导入资料 · {parent_label}"
+        try:
+            stat = path.stat()
+            size = stat.st_size
+            modified = datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(timespec="seconds")
+        except OSError:
+            missing += 1
+            size = 0
+            modified = source.get("imported_at")
+        rows.append((
+            str(root), str(path), relative_text, path.name or source["filename"],
+            path.suffix.lower() or "[none]", category, source_folder,
+            size, modified, 0,
+        ))
+    if rows:
+        conn.executemany(
+            """INSERT INTO project_catalog_items(
+                project_root,file_path,relative_path,filename,extension,category_key,source_folder,
+                bytes,modified_at,representative
+               ) VALUES(?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(file_path) DO UPDATE SET
+                project_root=excluded.project_root,relative_path=excluded.relative_path,
+                filename=excluded.filename,extension=excluded.extension,category_key=excluded.category_key,
+                source_folder=excluded.source_folder,bytes=excluded.bytes,modified_at=excluded.modified_at""",
+            rows,
+        )
+        conn.commit()
+    return {"sources": len(sources), "items": len(rows), "missing": missing}
+
+
 def ensure_project_catalog(database: Database, snapshot: dict[str, Any] | None) -> None:
     if not snapshot or snapshot.get("empty"):
         return
@@ -130,6 +216,17 @@ def ensure_project_catalog(database: Database, snapshot: dict[str, Any] | None) 
         ).fetchone()
     if not row or int(row["count"]) < expected:
         sync_project_catalog(database, snapshot)
+    with database.connect() as conn:
+        missing = conn.execute(
+            """SELECT COUNT(*) count FROM sources s
+               LEFT JOIN project_catalog_items i ON lower(i.file_path)=lower(s.file_path)
+               WHERE s.status='ready' AND (i.id IS NULL OR i.project_root<>?)""",
+            (root,),
+        ).fetchone()["count"]
+        # One-time compatibility repair for workspaces whose imported sources
+        # predate catalog synchronization. Normal requests remain read-only.
+        if missing:
+            sync_imported_sources_to_catalog(conn, root)
 
 
 def catalog_payload(

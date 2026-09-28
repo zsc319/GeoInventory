@@ -2,9 +2,15 @@ from __future__ import annotations
 
 import math
 import re
+import time
 from collections import defaultdict
 from statistics import median
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
+
+try:  # The packaged desktop runtime includes NumPy; keep a safe fallback.
+    import numpy as np
+except ImportError:  # pragma: no cover - exercised by minimal deployments
+    np = None
 
 from .production import build_production_series
 
@@ -27,7 +33,44 @@ INDICATORS = [
     {"key": "nearest_distance", "label": "最近邻井距", "unit": "m", "group": "空间", "priority": "conditional", "direction": 0, "help": "相同主力层优先的最近邻距离，用于识别加密井和空间相近井。"},
     {"key": "perforation_length", "label": "累计射孔厚度", "unit": "m MD", "group": "层位/完井", "priority": "conditional", "direction": 1, "help": "各射孔段MD厚度求和；分层结果同时保留在井清单中。"},
     {"key": "formation_count", "label": "开发层位数", "unit": "层", "group": "层位/完井", "priority": "conditional", "direction": 0, "help": "生产层系与射孔层段去重计数，多层合采井建议单独核查。"},
-    {"key": "initial_gor", "label": "初期汽油比", "unit": "scf/bbl", "group": "流体", "priority": "missing", "direction": 0, "help": "当前生产表没有产气字段；补充日产气后才能计算，绝不以空值或0代替。"},
+    {"key": "initial_gor", "label": "初期汽油比", "unit": "scf/bbl", "group": "流体", "priority": "conditional", "direction": 0, "help": "前3个有效期日产气÷日产油的平均值；仅在原始 MDB 有可用产气字段时参与。"},
+]
+
+# Only additive, same-window production quantities are exposed to the map's
+# composition glyph.  Gas is converted to barrel-of-oil equivalent before it
+# is combined with liquid volumes; ratios and trend metrics are deliberately
+# absent because they cannot form a physically meaningful whole.
+COMPOSITION_SCHEMES = [
+    {
+        "key": "initial_3m_rate",
+        "label": "初期3个月平均日产",
+        "total_unit": "bbl-eq/d",
+        "components": [
+            {"phase": "oil", "label": "油", "metric_key": "initial_3m_oil_rate", "unit": "bbl/d", "color": "#2f9d78"},
+            {"phase": "water", "label": "水", "metric_key": "initial_3m_water_rate", "unit": "bbl/d", "color": "#4b98d2"},
+            {"phase": "gas", "label": "气当量", "metric_key": "initial_3m_gas_boe_rate", "unit": "boe/d", "color": "#e7a23e"},
+        ],
+    },
+    {
+        "key": "late_3m_rate",
+        "label": "末期3个月平均日产",
+        "total_unit": "bbl-eq/d",
+        "components": [
+            {"phase": "oil", "label": "油", "metric_key": "late_3m_oil_rate", "unit": "bbl/d", "color": "#2f9d78"},
+            {"phase": "water", "label": "水", "metric_key": "late_3m_water_rate", "unit": "bbl/d", "color": "#4b98d2"},
+            {"phase": "gas", "label": "气当量", "metric_key": "late_3m_gas_boe_rate", "unit": "boe/d", "color": "#e7a23e"},
+        ],
+    },
+    {
+        "key": "cumulative",
+        "label": "累计产量",
+        "total_unit": "kbbl-eq",
+        "components": [
+            {"phase": "oil", "label": "油", "metric_key": "cumulative_oil", "unit": "kbbl", "color": "#2f9d78"},
+            {"phase": "water", "label": "水", "metric_key": "cumulative_water", "unit": "kbbl", "color": "#4b98d2"},
+            {"phase": "gas", "label": "气当量", "metric_key": "cumulative_gas_kboe", "unit": "kboe", "color": "#e7a23e"},
+        ],
+    },
 ]
 
 INTERVENTION_TOKENS = (
@@ -92,29 +135,38 @@ def _segment_feature_values(series: list[dict[str, Any]], inherited: dict[str, A
     """Recalculate time-dependent features for one auditable production segment."""
     values = dict(inherited)
     oil_rates = [float(row["oil_rate"]) for row in series if _number(row.get("oil_rate")) is not None]
+    water_rates = [float(row["water_rate"]) for row in series if _number(row.get("water_rate")) is not None]
+    gas_rates = [float(row["gas_rate"]) for row in series if _number(row.get("gas_rate")) is not None]
     water_cuts = [float(row["water_cut"]) for row in series if _number(row.get("water_cut")) is not None]
+    gas_oil_ratios = [float(row["gas_oil_ratio"]) for row in series if _number(row.get("gas_oil_ratio")) is not None]
     initial_oil, late_oil = _mean(oil_rates[:3]), _mean(oil_rates[-3:])
+    initial_water_rate, late_water_rate = _mean(water_rates[:3]), _mean(water_rates[-3:])
+    initial_gas_rate, late_gas_rate = _mean(gas_rates[:3]), _mean(gas_rates[-3:])
     initial_water, late_water = _mean(water_cuts[:3]), _mean(water_cuts[-3:])
     days = [_number(row.get("days_on")) for row in series]
     valid_days = [value for value in days if value is not None]
     pressure = [_number(row.get("pressure")) for row in series]
     pressure = [value for value in pressure if value is not None]
 
-    def segment_volume(monthly_key: str, cumulative_key: str) -> float | None:
+    def segment_volume(monthly_key: str, cumulative_key: str, divisor: float = 1000.0) -> float | None:
         monthly = [_number(row.get(monthly_key)) for row in series]
         monthly = [value for value in monthly if value is not None]
         if monthly:
-            return sum(monthly) / 1000
+            return sum(monthly) / divisor
         cumulative = [_number(row.get(cumulative_key)) for row in series]
         cumulative = [value for value in cumulative if value is not None]
         if len(cumulative) >= 2:
-            return max(0.0, cumulative[-1] - cumulative[0]) / 1000
+            return max(0.0, cumulative[-1] - cumulative[0]) / divisor
         return None
 
     values.update({
         "initial_3m_oil_rate": initial_oil,
+        "initial_3m_water_rate": initial_water_rate,
+        "initial_3m_gas_boe_rate": initial_gas_rate / 6000 if initial_gas_rate is not None else None,
         "peak_oil_rate": max(oil_rates) if oil_rates else None,
         "late_3m_oil_rate": late_oil,
+        "late_3m_water_rate": late_water_rate,
+        "late_3m_gas_boe_rate": late_gas_rate / 6000 if late_gas_rate is not None else None,
         "oil_decline_pct": ((initial_oil - late_oil) / abs(initial_oil) * 100) if initial_oil not in (None, 0) and late_oil is not None else None,
         "trend_stability": _trend_stability(oil_rates),
         "late_water_cut": late_water,
@@ -123,7 +175,9 @@ def _segment_feature_values(series: list[dict[str, Any]], inherited: dict[str, A
         "uptime_ratio": min(100.0, sum(valid_days) / (len(valid_days) * 30.4375) * 100) if valid_days else None,
         "cumulative_oil": segment_volume("monthly_oil", "cumulative_oil"),
         "cumulative_water": segment_volume("monthly_water", "cumulative_water"),
+        "cumulative_gas_kboe": segment_volume("monthly_gas", "cumulative_gas", 6_000_000),
         "pressure_change": pressure[-1] - pressure[0] if len(pressure) >= 2 else None,
+        "initial_gor": _mean(gas_oil_ratios[:3]),
     })
     return values
 
@@ -155,11 +209,17 @@ def build_feature_dataset(
         source = sorted(monthly_by_well.get(key, []), key=lambda row: (_date_key(row.get("production_month")), int(row.get("id") or 0)))
         series = build_production_series(source)
         oil_rates = [float(row["oil_rate"]) for row in series if _number(row.get("oil_rate")) is not None]
+        water_rates = [float(row["water_rate"]) for row in series if _number(row.get("water_rate")) is not None]
+        gas_rates = [float(row["gas_rate"]) for row in series if _number(row.get("gas_rate")) is not None]
         water_cuts = [float(row["water_cut"]) for row in series if _number(row.get("water_cut")) is not None]
+        gas_oil_ratios = [float(row["gas_oil_ratio"]) for row in series if _number(row.get("gas_oil_ratio")) is not None]
         initial_oil, late_oil = _mean(oil_rates[:3]), _mean(oil_rates[-3:])
+        initial_water_rate, late_water_rate = _mean(water_rates[:3]), _mean(water_rates[-3:])
+        initial_gas_rate, late_gas_rate = _mean(gas_rates[:3]), _mean(gas_rates[-3:])
         initial_water, late_water = _mean(water_cuts[:3]), _mean(water_cuts[-3:])
         cum_oil = next((_number(row.get("cumulative_oil")) for row in reversed(series) if _number(row.get("cumulative_oil")) is not None), None)
         cum_water = next((_number(row.get("cumulative_water")) for row in reversed(series) if _number(row.get("cumulative_water")) is not None), None)
+        cum_gas = next((_number(row.get("cumulative_gas")) for row in reversed(series) if _number(row.get("cumulative_gas")) is not None), None)
         days = [_number(row.get("days_on")) for row in series]
         valid_days = [value for value in days if value is not None]
         pressure = [_number(row.get("pressure")) for row in series]
@@ -171,8 +231,12 @@ def build_feature_dataset(
         unique_formations = list(dict.fromkeys(formations))
         values = {
             "initial_3m_oil_rate": initial_oil,
+            "initial_3m_water_rate": initial_water_rate,
+            "initial_3m_gas_boe_rate": initial_gas_rate / 6000 if initial_gas_rate is not None else None,
             "peak_oil_rate": max(oil_rates) if oil_rates else None,
             "late_3m_oil_rate": late_oil,
+            "late_3m_water_rate": late_water_rate,
+            "late_3m_gas_boe_rate": late_gas_rate / 6000 if late_gas_rate is not None else None,
             "oil_decline_pct": ((initial_oil - late_oil) / abs(initial_oil) * 100) if initial_oil not in (None, 0) and late_oil is not None else None,
             "trend_stability": _trend_stability(oil_rates),
             "late_water_cut": late_water,
@@ -181,13 +245,14 @@ def build_feature_dataset(
             "uptime_ratio": min(100.0, sum(valid_days) / (len(valid_days) * 30.4375) * 100) if valid_days else None,
             "cumulative_oil": cum_oil / 1000 if cum_oil is not None else None,
             "cumulative_water": cum_water / 1000 if cum_water is not None else None,
+            "cumulative_gas_kboe": cum_gas / 6_000_000 if cum_gas is not None else None,
             "pressure_change": pressure[-1] - pressure[0] if len(pressure) >= 2 else None,
             "intervention_response": intervention_response,
             "event_count": intervention_count or len(events_by_well.get(key, [])),
             "nearest_distance": None,
             "perforation_length": sum(max(0.0, (_number(row.get("base_md")) or 0) - (_number(row.get("top_md")) or 0)) for row in intervals),
             "formation_count": len(unique_formations),
-            "initial_gor": None,
+            "initial_gor": _mean(gas_oil_ratios[:3]),
         }
         intervention_events = sorted(
             [row for row in events_by_well.get(key, []) if _event_is_intervention(row)],
@@ -247,7 +312,12 @@ def build_feature_dataset(
             "available": available > 0 and definition["priority"] != "missing",
             "selected": definition["priority"] == "recommended" and available >= max(2, math.ceil(len(rows) * 0.5)),
         })
-    return {"wells": rows, "indicators": indicators}
+    return {
+        "wells": rows,
+        "indicators": indicators,
+        "composition_schemes": COMPOSITION_SCHEMES,
+        "composition_note": "油、水按桶计；气相按 6,000 scf = 1 BOE 折算。仅用于同时间口径的产量组成展示。",
+    }
 
 
 def _quantile(values: list[float], fraction: float) -> float:
@@ -275,15 +345,46 @@ def _distance(left: list[float], right: list[float]) -> float:
     return sum((a - b) ** 2 for a, b in zip(left, right))
 
 
-def _kmeans(matrix: list[list[float]], clusters: int, max_iterations: int) -> tuple[list[int], list[list[float]], list[float]]:
+def _kmeans(
+    matrix: list[list[float]], clusters: int, max_iterations: int,
+    progress: Callable[[float, str], None] | None = None,
+) -> tuple[list[int], list[list[float]], list[float]]:
     # Deterministic farthest-point seeding makes repeated geological reviews reproducible.
+    if np is not None:
+        values = np.asarray(matrix, dtype=float)
+        center_indexes = [int(np.argmin(values.sum(axis=1)))]
+        while len(center_indexes) < clusters:
+            available = np.ones(len(values), dtype=bool)
+            available[center_indexes] = False
+            distances = ((values[:, None, :] - values[center_indexes][None, :, :]) ** 2).sum(axis=2)
+            nearest = distances.min(axis=1)
+            nearest[~available] = -1
+            center_indexes.append(int(np.argmax(nearest)))
+        centroids = values[center_indexes].copy()
+        assignments = np.full(len(values), -1, dtype=int)
+        history: list[float] = []
+        for iteration in range(max_iterations):
+            distances = ((values[:, None, :] - centroids[None, :, :]) ** 2).sum(axis=2)
+            updated = distances.argmin(axis=1)
+            history.append(round(float(distances[np.arange(len(values)), updated].sum()), 6))
+            if np.array_equal(updated, assignments):
+                break
+            assignments = updated
+            for cluster in range(clusters):
+                members = values[assignments == cluster]
+                if len(members):
+                    centroids[cluster] = members.mean(axis=0)
+            if progress and (iteration == 0 or (iteration + 1) % max(1, max_iterations // 20) == 0):
+                progress((iteration + 1) / max_iterations, f"K-Means 第 {iteration + 1} / {max_iterations} 轮")
+        return assignments.tolist(), centroids.tolist(), history
+
     center_indexes = [min(range(len(matrix)), key=lambda index: sum(matrix[index]))]
     while len(center_indexes) < clusters:
         center_indexes.append(max((index for index in range(len(matrix)) if index not in center_indexes), key=lambda index: min(_distance(matrix[index], matrix[chosen]) for chosen in center_indexes)))
     centroids = [matrix[index][:] for index in center_indexes]
     assignments = [-1] * len(matrix)
     history = []
-    for _ in range(max_iterations):
+    for iteration in range(max_iterations):
         updated = [min(range(clusters), key=lambda cluster: _distance(row, centroids[cluster])) for row in matrix]
         inertia = sum(_distance(row, centroids[cluster]) for row, cluster in zip(matrix, updated))
         history.append(round(inertia, 6))
@@ -294,13 +395,15 @@ def _kmeans(matrix: list[list[float]], clusters: int, max_iterations: int) -> tu
             members = [row for row, assigned in zip(matrix, assignments) if assigned == cluster]
             if members:
                 centroids[cluster] = [sum(column) / len(members) for column in zip(*members)]
+        if progress and (iteration == 0 or (iteration + 1) % max(1, max_iterations // 20) == 0):
+            progress((iteration + 1) / max_iterations, f"K-Means 第 {iteration + 1} / {max_iterations} 轮")
     return assignments, centroids, history
 
 
 def _som(
     matrix: list[list[float]], clusters: int, max_iterations: int,
     learning_rate: float = 0.45, radius: float | None = None,
-    topology: str = "line",
+    topology: str = "line", progress: Callable[[float, str], None] | None = None,
 ) -> tuple[list[int], list[list[float]], list[float]]:
     """Train a deterministic one-dimensional SOM for auditable well typing."""
     center_indexes = [min(range(len(matrix)), key=lambda index: sum(matrix[index]))]
@@ -314,10 +417,36 @@ def _som(
     initial_rate = max(0.01, min(1.0, float(learning_rate)))
     history: list[float] = []
     epochs = max(5, min(max_iterations, 500))
+    if np is not None:
+        values = np.asarray(matrix, dtype=float)
+        weights_array = np.asarray(weights, dtype=float)
+        neuron_indexes = np.arange(clusters)
+        for epoch in range(epochs):
+            fraction = epoch / max(1, epochs - 1)
+            rate = initial_rate * math.exp(-3.0 * fraction)
+            neighborhood = max(0.15, initial_radius * math.exp(-3.0 * fraction))
+            # Preserve the original online SOM update order exactly.  Only the
+            # per-neuron distance and weight arithmetic is vectorized, so an
+            # existing geological scheme does not change merely due to speed.
+            for row in values:
+                winner = int(np.argmin(((weights_array - row) ** 2).sum(axis=1)))
+                grid_distance = np.abs(neuron_indexes - winner)
+                if topology == "ring":
+                    grid_distance = np.minimum(grid_distance, clusters - grid_distance)
+                influence = np.exp(-(grid_distance ** 2) / (2 * neighborhood * neighborhood))
+                weights_array += rate * influence[:, None] * (row - weights_array)
+            distances = ((values[:, None, :] - weights_array[None, :, :]) ** 2).sum(axis=2)
+            assignments_array = distances.argmin(axis=1)
+            error = np.sqrt(distances[np.arange(len(values)), assignments_array]).mean()
+            history.append(round(float(error), 6))
+            if progress and (epoch == 0 or (epoch + 1) % max(1, epochs // 20) == 0 or epoch + 1 == epochs):
+                progress((epoch + 1) / epochs, f"SOM 第 {epoch + 1} / {epochs} 轮")
+        return assignments_array.tolist(), weights_array.tolist(), history
+
     for epoch in range(epochs):
-        progress = epoch / max(1, epochs - 1)
-        rate = initial_rate * math.exp(-3.0 * progress)
-        neighborhood = max(0.15, initial_radius * math.exp(-3.0 * progress))
+        epoch_progress = epoch / max(1, epochs - 1)
+        rate = initial_rate * math.exp(-3.0 * epoch_progress)
+        neighborhood = max(0.15, initial_radius * math.exp(-3.0 * epoch_progress))
         for row in matrix:
             winner = min(range(clusters), key=lambda index: _distance(row, weights[index]))
             for index in range(clusters):
@@ -329,12 +458,36 @@ def _som(
         assignments = [min(range(clusters), key=lambda index: _distance(row, weights[index])) for row in matrix]
         error = sum(math.sqrt(_distance(row, weights[index])) for row, index in zip(matrix, assignments)) / len(matrix)
         history.append(round(error, 6))
+        if progress and (epoch == 0 or (epoch + 1) % max(1, epochs // 20) == 0 or epoch + 1 == epochs):
+            progress((epoch + 1) / epochs, f"SOM 第 {epoch + 1} / {epochs} 轮")
     return assignments, weights, history
 
 
 def _silhouette(matrix: list[list[float]], assignments: list[int]) -> float | None:
     if len(set(assignments)) < 2 or len(matrix) < 3:
         return None
+    if np is not None:
+        values = np.asarray(matrix, dtype=float)
+        labels = np.asarray(assignments, dtype=int)
+        # Bound quadratic memory on very large projects while keeping a fixed,
+        # reproducible sample for comparable scheme quality statistics.
+        sample_indexes = np.arange(len(values)) if len(values) <= 2000 else np.linspace(0, len(values) - 1, 2000, dtype=int)
+        sampled = values[sample_indexes]
+        squared = np.maximum(
+            (sampled * sampled).sum(axis=1)[:, None] + (values * values).sum(axis=1)[None, :] - 2 * sampled @ values.T,
+            0.0,
+        )
+        distances = np.sqrt(squared)
+        scores = np.zeros(len(sample_indexes), dtype=float)
+        clusters = np.unique(labels)
+        for position, source_index in enumerate(sample_indexes):
+            own_mask = labels == labels[source_index]
+            own_count = int(own_mask.sum()) - 1
+            a = float(distances[position, own_mask].sum() / own_count) if own_count > 0 else 0.0
+            others = [float(distances[position, labels == cluster].mean()) for cluster in clusters if cluster != labels[source_index]]
+            b = min(others) if others else 0.0
+            scores[position] = (b - a) / max(a, b) if max(a, b) else 0.0
+        return round(float(scores.mean()), 4)
     scores = []
     for index, row in enumerate(matrix):
         own = [math.sqrt(_distance(row, matrix[j])) for j in range(len(matrix)) if j != index and assignments[j] == assignments[index]]
@@ -356,6 +509,20 @@ def _principal_components(matrix: list[list[float]]) -> list[list[float]]:
     dimensions = len(matrix[0]) if matrix else 0
     if not dimensions:
         return [[], []]
+    if np is not None:
+        values = np.asarray(matrix, dtype=float)
+        covariance = values.T @ values / max(1, len(values))
+        eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+        axes = []
+        for index in np.argsort(eigenvalues)[::-1][:2]:
+            axis = eigenvectors[:, index]
+            pivot = int(np.argmax(np.abs(axis)))
+            if axis[pivot] < 0:
+                axis = -axis
+            axes.append(axis.tolist())
+        while len(axes) < 2:
+            axes.append([0.0] * dimensions)
+        return axes
     covariance = [[sum(row[i] * row[j] for row in matrix) / max(1, len(matrix)) for j in range(dimensions)] for i in range(dimensions)]
 
     def power(source: list[list[float]], seed_shift: int = 0) -> tuple[list[float], float]:
@@ -385,7 +552,11 @@ def train_and_evaluate(
     evaluation_keys: list[str], cluster_count: int = 3, max_iterations: int = 80,
     segmentation_mode: str = "split", model_type: str = "kmeans",
     model_parameters: dict[str, Any] | None = None,
+    progress: Callable[[float, str], None] | None = None,
 ) -> dict[str, Any]:
+    started = time.monotonic()
+    if progress:
+        progress(0.03, "核对指标与井清单")
     definitions = {row["key"]: row for row in dataset["indicators"]}
     selected = [key for key in indicator_keys if key in definitions and definitions[key]["available"]]
     by_key = {row["well_key"]: row for row in dataset["wells"]}
@@ -419,6 +590,9 @@ def train_and_evaluate(
     if not all(row["passed"] for row in checks):
         return {"ready": False, "self_check": checks, "jump_to": next(row["jump_to"] for row in checks if not row["passed"])}
 
+    if progress:
+        progress(0.12, f"构建 {len(training)} 个有效训练样本")
+
     medians, means, scales = {}, {}, {}
     for key in selected:
         values = [float(row["values"][key]) for row in training if row["values"].get(key) is not None]
@@ -431,16 +605,19 @@ def train_and_evaluate(
         return [((row["values"].get(key) if row["values"].get(key) is not None else medians[key]) - means[key]) / scales[key] for key in selected]
 
     matrix = [vector(row) for row in training]
+    if progress:
+        progress(0.24, "完成缺失补齐与标准化")
     model_parameters = model_parameters or {}
+    model_progress = (lambda fraction, stage: progress(0.24 + fraction * 0.5, stage)) if progress else None
     if model_type == "som":
         assignments, centroids, history = _som(
             matrix, cluster_count, max_iterations,
             float(model_parameters.get("learning_rate") or 0.45),
             float(model_parameters.get("radius") or max(1.0, cluster_count / 2)),
-            str(model_parameters.get("topology") or "line"),
+            str(model_parameters.get("topology") or "line"), model_progress,
         )
     else:
-        assignments, centroids, history = _kmeans(matrix, cluster_count, max(5, min(max_iterations, 500)))
+        assignments, centroids, history = _kmeans(matrix, cluster_count, max(5, min(max_iterations, 500)), model_progress)
     direction = [definitions[key].get("direction", 0) for key in selected]
     scores = [sum(value * sign for value, sign in zip(center, direction) if sign) for center in centroids]
     order = sorted(range(cluster_count), key=lambda cluster: scores[cluster], reverse=True)
@@ -448,6 +625,11 @@ def train_and_evaluate(
     cluster_names = {cluster: labels[min(rank, len(labels) - 1)] for rank, cluster in enumerate(order)}
     cluster_ranks = {cluster: rank + 1 for rank, cluster in enumerate(order)}
     populations = {key: [float(row["values"][key]) for row in training if row["values"].get(key) is not None] for key in selected}
+    if progress:
+        progress(0.79, "计算轮廓系数")
+    silhouette = _silhouette(matrix, assignments)
+    if progress:
+        progress(0.88, "计算 PCA 二维投影")
     components = _principal_components(matrix)
 
     def projection(row_vector: list[float]) -> tuple[float, float]:
@@ -495,16 +677,26 @@ def train_and_evaluate(
                 "max": max(values) if values else None,
             })
         profiles.append({"cluster": cluster, "category": category, "rank": cluster_ranks[cluster], "count": len(members), "metrics": metric_profiles})
-    return {
+    if progress:
+        progress(0.92, "生成井级评价与二维投影")
+    result = {
         "ready": True, "self_check": checks, "model": "SOM 自组织映射（标准化 + 邻域竞争学习）" if model_type == "som" else "K-Means（标准化 + 中位数补缺）",
         "model_type": model_type, "model_parameters": model_parameters,
         "selected_indicators": selected, "training_count": len(training_set), "training_sample_count": len(training), "evaluation_count": len(evaluation),
         "segmentation_mode": segmentation_mode,
         "cluster_count": cluster_count, "iterations": len(history), "loss_history": history,
-        "inertia": history[-1] if history else None, "silhouette": _silhouette(matrix, assignments),
+        "inertia": history[-1] if history else None, "silhouette": silhouette,
         "cluster_counts": counts, "cluster_profiles": profiles, "results": results,
         "training_samples": training_sample_results,
         "projection": {"method": "PCA", "x_label": "主成分 1", "y_label": "主成分 2"},
         "category_order": [{"category": cluster_names[cluster], "cluster": cluster, "rank": cluster_ranks[cluster], "level": "相对较好" if cluster_ranks[cluster] == 1 else "相对偏弱" if cluster_ranks[cluster] == cluster_count else "中间过渡"} for cluster in order],
         "notes": ["类别按所选指标的有利方向排序：序号越小，综合产能特征相对越好；这不是储量分级。", "缺失值仅在模型计算中用训练集中位数补齐；结果表仍显示原始缺失。", "默认仅在首个明确措施事件前后各至少3个有效期时拆成两个训练样本；井级评价仍回到整井口径。"],
     }
+    result["performance"] = {
+        "engine": "NumPy 向量化计算" if np is not None else "Python 兼容计算",
+        "elapsed_seconds": round(time.monotonic() - started, 3),
+        "silhouette_sample_count": min(len(matrix), 2000),
+    }
+    if progress:
+        progress(1.0, "训练与质量评价完成")
+    return result

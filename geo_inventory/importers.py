@@ -32,8 +32,10 @@ SOURCE_PRIORITY = {
 FIELD_ALIASES = {
     "well": {"WELL", "WELLNAME", "WELLID", "BOREHOLE", "HOLENAME", "井名", "井号"},
     "uwi": {"UWI", "API", "WELLUWI", "UNIQUEWELLID", "统一井号"},
-    "x": {"X", "EASTING", "XCOORD", "XCOORDINATE", "LONGITUDE", "LON", "经度", "横坐标"},
-    "y": {"Y", "NORTHING", "YCOORD", "YCOORDINATE", "LATITUDE", "LAT", "纬度", "纵坐标"},
+    "x": ("SURFACEX", "WELLHEADX", "地面X", "井口X", "X", "EASTING", "XCOORD", "XCOORDINATE", "LONGITUDE", "LON", "经度", "横坐标"),
+    "y": ("SURFACEY", "WELLHEADY", "地面Y", "井口Y", "Y", "NORTHING", "YCOORD", "YCOORDINATE", "LATITUDE", "LAT", "纬度", "纵坐标"),
+    "base_x": {"BASEX", "BOTTOMX", "TDX", "井底X"},
+    "base_y": {"BASEY", "BOTTOMY", "TDY", "井底Y"},
     "kb": {"KB", "KBELEVATION", "ELEVATION", "DERRICKELEVATION", "DATUMELEVATION", "补心海拔", "井口海拔"},
     "td": {"TD", "TOTALDEPTH", "WELLDEPTH", "完钻井深", "总井深"},
     "md": {"MD", "MEASUREDDEPTH", "DEPTH", "DEPT", "井深", "斜深"},
@@ -344,6 +346,7 @@ class ImportService:
         mapped = field_map(headers)
         if "well" not in mapped:
             raise ValueError("井头表缺少井名列（如 WELL/WELL_NAME/井名）")
+        missing_coordinates = 0
         for row_no, row in rows:
             raw_name = row.get(mapped["well"])
             if not clean_text(raw_name):
@@ -351,11 +354,18 @@ class ImportService:
             values = {key: row.get(header) for key, header in mapped.items() if key != "well"}
             values["crs"] = crs
             values["attributes"] = row
+            if number(values.get("x")) is None or number(values.get("y")) is None:
+                missing_coordinates += 1
             self._add_occurrence(conn, result, raw_name, row_no, values)
             result.records += 1
             if result.records % 256 == 0:
                 _report_progress(progress_callback, 0.12 + 0.8 * result.records / max(1, len(rows)), "写入井头记录")
         result.details["field_mapping"] = mapped
+        result.details["coordinate_role"] = "surface X / surface Y 用作井口二维投影；base X / base Y 作为原始井底属性保留"
+        result.details["located_records"] = result.records - missing_coordinates
+        result.details["missing_coordinate_records"] = missing_coordinates
+        if missing_coordinates:
+            result.warnings.append(f"{missing_coordinates} 口井缺少完整地面 X/Y，已入库但不会出现在二维投影中")
 
     def _import_deviation(self, conn: sqlite3.Connection, path: Path, result: ImportResult, crs: str | None, progress_callback=None, **_: Any) -> None:
         headers, rows = read_tabular(path)

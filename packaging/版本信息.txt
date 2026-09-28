@@ -1,6 +1,6 @@
-地数镜 GeoInventory 0.6.1
+地数镜 GeoInventory 0.7.0
 发布类型：Windows x64 便携版（科室内部测试）
-构建日期：2026-09-14
+构建日期：2026-09-28
 作者：Zhu Sicheng（朱思成）
 邮箱：zhusc.syky@sinopec.com
 版权：Copyright © 2026 Zhu Sicheng. All rights reserved.

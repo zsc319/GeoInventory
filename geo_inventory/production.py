@@ -13,9 +13,12 @@ PRODUCTION_FIELD_CONTRACT = [
     {"key": "days_on", "label": "开井天数", "required": False, "examples": ["DAYS_ON"]},
     {"key": "liquid_rate", "label": "日产液", "required": False, "examples": ["LIQUID_RATE", "QL"]},
     {"key": "oil_rate", "label": "日产油", "required": False, "examples": ["OIL_RATE", "QO"]},
+    {"key": "water_rate", "label": "日产水", "required": False, "examples": ["WATER_RATE", "QW"]},
+    {"key": "gas_rate", "label": "日产气", "required": False, "examples": ["GAS_RATE", "QG"]},
     {"key": "water_cut", "label": "含水率", "required": False, "examples": ["WATER_CUT", "WCT"]},
     {"key": "cumulative_oil", "label": "累产油", "required": False, "examples": ["CUM_OIL", "NP"]},
     {"key": "cumulative_water", "label": "累产水", "required": False, "examples": ["CUM_WATER", "WP"]},
+    {"key": "cumulative_gas", "label": "累产气", "required": False, "examples": ["CUM_GAS", "GP"]},
     {"key": "pressure", "label": "压力", "required": False, "examples": ["BHP", "THP", "PRESSURE"]},
     {"key": "status", "label": "开关井状态", "required": False, "examples": ["STATUS", "OPEN_STATUS"]},
 ]
@@ -28,12 +31,16 @@ PRODUCTION_SERIES_FIELDS = [
     {"key": "liquid_rate", "label": "日产液", "unit": "原表日率"},
     {"key": "oil_rate", "label": "日产油", "unit": "原表日率"},
     {"key": "water_rate", "label": "日产水", "unit": "原表日率"},
+    {"key": "gas_rate", "label": "日产气", "unit": "原表日率"},
+    {"key": "gas_oil_ratio", "label": "汽油比", "unit": "scf/bbl"},
     {"key": "water_cut", "label": "含水率", "unit": "%"},
     {"key": "monthly_oil", "label": "月产油", "unit": "原表体积"},
     {"key": "monthly_water", "label": "月产水", "unit": "原表体积"},
+    {"key": "monthly_gas", "label": "月产气", "unit": "原表体积"},
     {"key": "monthly_liquid", "label": "月产液", "unit": "原表体积"},
     {"key": "cumulative_oil", "label": "累产油", "unit": "原表体积"},
     {"key": "cumulative_water", "label": "累产水", "unit": "原表体积"},
+    {"key": "cumulative_gas", "label": "累产气", "unit": "原表体积"},
     {"key": "cumulative_liquid", "label": "累产液", "unit": "原表体积"},
     {"key": "pressure", "label": "压力", "unit": "原表压力单位"},
     {"key": "days_on", "label": "生产天数", "unit": "天"},
@@ -90,12 +97,12 @@ def build_production_series(rows: Iterable[dict[str, Any]]) -> list[dict[str, An
         if date:
             by_date[date].append(item)
     series: list[dict[str, Any]] = []
-    cumulative_oil = cumulative_water = cumulative_days = 0.0
-    explicit_oil = explicit_water = None
+    cumulative_oil = cumulative_water = cumulative_gas = cumulative_days = 0.0
+    explicit_oil = explicit_water = explicit_gas = None
     for month_index, date in enumerate(sorted(by_date, key=_date_key), 1):
         records = sorted(by_date[date], key=lambda row: int(row.get("id") or 0))
         point: dict[str, Any] = {"date": date, "month_index": month_index}
-        for field in ("days_on", "liquid_rate", "oil_rate", "water_rate", "water_cut", "monthly_oil", "monthly_water", "pressure", "status"):
+        for field in ("days_on", "liquid_rate", "oil_rate", "water_rate", "gas_rate", "water_cut", "monthly_oil", "monthly_water", "monthly_gas", "pressure", "status"):
             value = next((row.get(field) for row in reversed(records) if row.get(field) is not None), None)
             point[field] = _number(value) if field != "status" else value
         point["water_cut"] = _normalized_water_cut(point.get("water_cut"))
@@ -103,16 +110,21 @@ def build_production_series(rows: Iterable[dict[str, Any]]) -> list[dict[str, An
             point["liquid_rate"] = sum(point.get(name) or 0.0 for name in ("oil_rate", "water_rate"))
         if point.get("water_cut") is None and point.get("liquid_rate") not in (None, 0) and point.get("water_rate") is not None:
             point["water_cut"] = point["water_rate"] / point["liquid_rate"] * 100
+        point["gas_oil_ratio"] = point["gas_rate"] / point["oil_rate"] if point.get("gas_rate") is not None and point.get("oil_rate") not in (None, 0) else None
         point["monthly_liquid"] = sum(point.get(name) or 0.0 for name in ("monthly_oil", "monthly_water")) if any(point.get(name) is not None for name in ("monthly_oil", "monthly_water")) else None
         cumulative_oil += point.get("monthly_oil") or 0.0
         cumulative_water += point.get("monthly_water") or 0.0
+        cumulative_gas += point.get("monthly_gas") or 0.0
         cumulative_days += point.get("days_on") or 0.0
         raw_cum_oil = next((_number(row.get("cumulative_oil")) for row in reversed(records) if _number(row.get("cumulative_oil")) is not None), None)
         raw_cum_water = next((_number(row.get("cumulative_water")) for row in reversed(records) if _number(row.get("cumulative_water")) is not None), None)
+        raw_cum_gas = next((_number(row.get("cumulative_gas")) for row in reversed(records) if _number(row.get("cumulative_gas")) is not None), None)
         explicit_oil = raw_cum_oil if raw_cum_oil is not None else explicit_oil
         explicit_water = raw_cum_water if raw_cum_water is not None else explicit_water
+        explicit_gas = raw_cum_gas if raw_cum_gas is not None else explicit_gas
         point["cumulative_oil"] = explicit_oil if explicit_oil is not None else cumulative_oil
         point["cumulative_water"] = explicit_water if explicit_water is not None else cumulative_water
+        point["cumulative_gas"] = explicit_gas if explicit_gas is not None else cumulative_gas
         point["cumulative_liquid"] = point["cumulative_oil"] + point["cumulative_water"]
         point["cumulative_days"] = cumulative_days
         series.append(point)
